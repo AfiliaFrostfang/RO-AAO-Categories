@@ -1,25 +1,27 @@
 // ==UserScript==
 // @name         Afilia AAO Categories
-// @namespace    https://github.com/AfiliaFrostfang
-// @version      1.3.1
-// @description  Categorize Rescue Operator AAOs in Game Settings and the Vehicle Dispatch Window.
+// @namespace    https://afiliafrostfang.de/
+// @version      1.4.0
+// @description  Categorizes Rescue Operator AAOs and adds categorized AAO selection to the vehicle dispatch window.
 // @author       AfiliaFrostfang
-// @license      AGPL-3.0-or-later
 // @match        https://game.rescue-operator.com/*
 // @grant        none
+// @run-at       document-idle
 // ==/UserScript==
 
-(() => {
+(function () {
     'use strict';
+
+    /* =========================================================
+       Configuration
+       ========================================================= */
 
     const DB_NAME = 'AfiliaAAOCategoriesV2';
     const DB_VERSION = 1;
     const STORE_NAME = 'settings';
 
-    const KEYS = {
-        CATEGORIES: 'categories',
-        ASSIGNMENTS: 'assignments'
-    };
+    const SETTINGS_PANEL_ID = 'afilia-aao-category-panel';
+    const DISPATCH_PANEL_ID = 'afilia-aao-dispatch-panel';
 
     const DEFAULT_CATEGORIES = [
         {
@@ -39,88 +41,44 @@
         }
     ];
 
-    const STYLE_ID = 'afilias-aao-categories-style';
-    const SETTINGS_PANEL_ID = 'afilias-aao-categories-panel';
-    const DISPATCH_PANEL_ID = 'afilias-aao-dispatch-categories-panel';
+    /* =========================================================
+       Runtime state
+       ========================================================= */
 
-    let dbPromise = null;
-    let scanTimer = null;
-    let scanRunning = false;
-    let observer = null;
-    let observerPauseUntil = 0;
+    let db = null;
+
+    let categories = [];
+    let assignments = {};
+
+
+    const aaoCatalog = new Map();
+
 
     const selectedAAOs = new Set();
 
-    let selectionChangeInProgress = false;
+    const originalAAORows = new Map();
 
-    // =========================================================
-    // Logging
-    // =========================================================
+    let observer = null;
+    let scanTimer = null;
 
-    function log(...args) {
-        console.log('[Afilia AAO Categories]', ...args);
-    }
+    let lastDispatchContainer = null;
+    let lastSettingsContainer = null;
 
-    // =========================================================
-    // Helpers
-    // =========================================================
+    let dispatchSearchValue = '';
 
-    function normalizeText(value) {
-        return String(value ?? '')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
+    /* =========================================================
+       IndexedDB
+       ========================================================= */
 
-    function getAAOKey(name) {
-        return normalizeText(name).toLowerCase();
-    }
+    function openDatabase() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-    function escapeHtml(value) {
-        return String(value)
-            .replaceAll('&', '&amp;')
-            .replaceAll('<', '&lt;')
-            .replaceAll('>', '&gt;')
-            .replaceAll('"', '&quot;')
-            .replaceAll("'", '&#039;');
-    }
+            request.onupgradeneeded = event => {
+                const database = event.target.result;
 
-    function randomId(prefix = 'cat') {
-        return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    }
-
-    function pauseObserver(ms = 100) {
-        observerPauseUntil = Math.max(
-            observerPauseUntil,
-            Date.now() + ms
-        );
-    }
-
-    // =========================================================
-    // IndexedDB
-    // =========================================================
-
-    function openDB() {
-        if (dbPromise) {
-            return dbPromise;
-        }
-
-        dbPromise = new Promise((resolve, reject) => {
-            const request = indexedDB.open(
-                DB_NAME,
-                DB_VERSION
-            );
-
-            request.onupgradeneeded = () => {
-                const database = request.result;
-
-                if (
-                    !database.objectStoreNames.contains(
-                        STORE_NAME
-                    )
-                ) {
-                    database.createObjectStore(
-                        STORE_NAME
-                    );
+                if (!database.objectStoreNames.contains(STORE_NAME)) {
+                    database.createObjectStore(STORE_NAME);
                 }
             };
 
@@ -132,326 +90,1442 @@
                 reject(request.error);
             };
         });
-
-        return dbPromise;
     }
 
-    async function dbGet(key) {
-        const database = await openDB();
-
+    function dbGet(key) {
         return new Promise((resolve, reject) => {
-            const transaction =
-                database.transaction(
-                    STORE_NAME,
-                    'readonly'
-                );
+            const transaction = db.transaction(STORE_NAME, 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            const request = store.get(key);
 
-            const store =
-                transaction.objectStore(
-                    STORE_NAME
-                );
-
-            const request =
-                store.get(key);
-
-            request.onsuccess = () => {
-                resolve(request.result);
-            };
-
-            request.onerror = () => {
-                reject(request.error);
-            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
         });
     }
 
-    async function dbPut(key, value) {
-        const database = await openDB();
-
+    function dbSet(key, value) {
         return new Promise((resolve, reject) => {
-            const transaction =
-                database.transaction(
-                    STORE_NAME,
-                    'readwrite'
-                );
+            const transaction = db.transaction(STORE_NAME, 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
 
-            const store =
-                transaction.objectStore(
-                    STORE_NAME
-                );
+            store.put(value, key);
 
-            const request =
-                store.put(value, key);
-
-            request.onsuccess = () => {
-                resolve();
-            };
-
-            request.onerror = () => {
-                reject(request.error);
-            };
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error);
         });
     }
 
-    async function loadCategories() {
-        let categories =
-            await dbGet(KEYS.CATEGORIES);
+    /* =========================================================
+       Utility
+       ========================================================= */
 
-        if (
-            !Array.isArray(categories) ||
-            categories.length === 0
-        ) {
-            categories =
-                structuredClone(
-                    DEFAULT_CATEGORIES
+    function normalizeName(name) {
+        return String(name || '')
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ');
+    }
+
+    function getAAOKey(name) {
+        return normalizeName(name);
+    }
+
+    function escapeHTML(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function createID(prefix = 'id') {
+        return `${prefix}_${Date.now()}_${Math.random()
+            .toString(36)
+            .slice(2, 8)}`;
+    }
+
+    function findCategory(categoryID) {
+        return categories.find(category => category.id === categoryID);
+    }
+
+    function getCategoryForAAO(key) {
+        const categoryID = assignments[key];
+
+        if (!categoryID) {
+            return null;
+        }
+
+        return findCategory(categoryID) || null;
+    }
+
+    /* =========================================================
+       Load / save
+       ========================================================= */
+
+    async function loadData() {
+        categories = await dbGet('categories');
+
+        if (!Array.isArray(categories) || categories.length === 0) {
+            categories = structuredClone(DEFAULT_CATEGORIES);
+            await dbSet('categories', categories);
+        }
+
+        assignments = await dbGet('assignments') || {};
+    }
+
+    async function saveCategories() {
+        await dbSet('categories', categories);
+    }
+
+    async function saveAssignments() {
+        await dbSet('assignments', assignments);
+    }
+
+    /* =========================================================
+       AAO discovery
+       ========================================================= */
+
+    function getAAOContainers() {
+        return Array.from(
+            document.querySelectorAll('[data-slot="sortable-content"]')
+        );
+    }
+
+    function isSettingsAAOContainer(container) {
+        if (!container) {
+            return false;
+        }
+
+        return !!container.querySelector(
+            '[data-slot="sortable-item-handle"][title="AAO verschieben"]'
+        );
+    }
+
+    function findSettingsAAOContainer() {
+        return getAAOContainers().find(isSettingsAAOContainer) || null;
+    }
+
+    /*
+     * Dispatch AAO container:
+     *
+     * The dispatch window does NOT use sortable-item.
+     * Its AAO entries look like:
+     *
+     * div.flex.items-center.gap-3.p-3.rounded-xl.border.cursor-pointer
+     *
+     * We therefore identify it through the dispatch dialog and
+     * its "AAO suchen..." input.
+     */
+    function findDispatchDialog() {
+        const dialogs = Array.from(
+            document.querySelectorAll('[role="dialog"][data-slot="sheet-content"]')
+        );
+
+        return dialogs.find(dialog => {
+            const search = dialog.querySelector(
+                'input[placeholder="AAO suchen..."]'
+            );
+
+            if (!search) {
+                return false;
+            }
+
+            return Array.from(dialog.querySelectorAll('h2'))
+                .some(h2 => h2.textContent.trim() === 'Fahrzeuge alarmieren');
+        }) || null;
+    }
+
+    function findDispatchList(dialog) {
+        if (!dialog) {
+            return null;
+        }
+
+        const searchInput = dialog.querySelector(
+            'input[placeholder="AAO suchen..."]'
+        );
+
+        if (!searchInput) {
+            return null;
+        }
+
+
+        const candidates = Array.from(
+            dialog.querySelectorAll('div.space-y-2')
+        );
+
+        for (const candidate of candidates) {
+            const cards = getDispatchCards(candidate);
+
+            if (cards.length > 0) {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    function getDispatchCards(container) {
+        if (!container) {
+            return [];
+        }
+
+        return Array.from(container.children).filter(child => {
+            return !!child.querySelector(
+                'div.font-semibold.text-sm.text-gray-900'
+            );
+        });
+    }
+
+
+    function discoverAAOs() {
+        let changed = false;
+
+
+        const settingsContainer = findSettingsAAOContainer();
+
+        if (settingsContainer) {
+            const rows = Array.from(
+                settingsContainer.querySelectorAll(
+                    ':scope > [data-slot="sortable-item"]'
+                )
+            );
+
+            for (const row of rows) {
+                const nameElement = row.querySelector(
+                    'span.font-semibold'
                 );
 
-            await dbPut(
-                KEYS.CATEGORIES,
-                categories
-            );
+                if (!nameElement) {
+                    continue;
+                }
+
+                const name = nameElement.textContent.trim();
+
+                if (!name) {
+                    continue;
+                }
+
+                const key = getAAOKey(name);
+
+                const summaryElement = row.querySelector(
+                    'span.font-mono'
+                );
+
+                const summary = summaryElement
+                    ? summaryElement.textContent.trim()
+                    : '';
+
+                const existing = aaoCatalog.get(key);
+
+                aaoCatalog.set(key, {
+                    key,
+                    name,
+                    summary,
+                    source: 'settings',
+                    row
+                });
+
+                originalAAORows.set(key, row);
+
+                if (
+                    !existing ||
+                    existing.name !== name ||
+                    existing.summary !== summary
+                ) {
+                    changed = true;
+                }
+            }
         }
 
-        return categories;
-    }
 
-    async function saveCategories(categories) {
-        await dbPut(
-            KEYS.CATEGORIES,
-            categories
-        );
-    }
+        const dispatchDialog = findDispatchDialog();
 
-    async function loadAssignments() {
-        const assignments =
-            await dbGet(
-                KEYS.ASSIGNMENTS
-            );
+        if (dispatchDialog) {
+            const list = findDispatchList(dispatchDialog);
 
-        if (
-            assignments &&
-            typeof assignments === 'object' &&
-            !Array.isArray(assignments)
-        ) {
-            return assignments;
+            if (list) {
+                const cards = getDispatchCards(list);
+
+                for (const card of cards) {
+                    const nameElement = card.querySelector(
+                        'div.font-semibold.text-sm.text-gray-900'
+                    );
+
+                    if (!nameElement) {
+                        continue;
+                    }
+
+                    const name = nameElement.textContent.trim();
+
+                    if (!name) {
+                        continue;
+                    }
+
+                    const key = getAAOKey(name);
+
+                    const summaryElement = card.querySelector(
+                        'div.text-xs.text-gray-500.font-mono'
+                    );
+
+                    const summary = summaryElement
+                        ? summaryElement.textContent.trim()
+                        : '';
+
+                    const existing = aaoCatalog.get(key);
+
+                    aaoCatalog.set(key, {
+                        key,
+                        name,
+                        summary,
+                        source: 'dispatch',
+                        row: card
+                    });
+
+                    originalAAORows.set(key, card);
+
+                    if (
+                        !existing ||
+                        existing.name !== name ||
+                        existing.summary !== summary
+                    ) {
+                        changed = true;
+                    }
+                }
+            }
         }
 
-        return {};
+        return changed;
     }
 
-    async function saveAssignments(assignments) {
-        await dbPut(
-            KEYS.ASSIGNMENTS,
-            assignments
-        );
+    /* =========================================================
+       Dispatch selection
+       ========================================================= */
+
+    function isAAOSelected(key) {
+        return selectedAAOs.has(key);
     }
 
-    // =========================================================
-    // Styles
-    // =========================================================
-
-    function injectStyles() {
-        if (
-            document.getElementById(
-                STYLE_ID
-            )
-        ) {
+    function setSelectedVisual(element, selected) {
+        if (!element) {
             return;
         }
 
-        const style =
-            document.createElement('style');
+        if (selected) {
+            element.classList.add('afilia-aao-selected');
 
-        style.id = STYLE_ID;
+            element.style.borderColor = '#ef4444';
+            element.style.backgroundColor = '#fef2f2';
+            element.style.boxShadow =
+                '0 1px 2px rgba(239,68,68,0.12), 0 8px 20px -6px rgba(239,68,68,0.25)';
 
-        style.textContent = `
-            #${SETTINGS_PANEL_ID},
-            #${DISPATCH_PANEL_ID} {
-                width: 100%;
-                box-sizing: border-box;
-                position: relative;
-                z-index: 10;
-                font-family: inherit;
+            const icon = element.querySelector('.afilia-aao-icon');
+
+            if (icon) {
+                icon.style.backgroundColor = '#fee2e2';
             }
 
+            const iconElement = element.querySelector('.afilia-aao-icon i');
+
+            if (iconElement) {
+                iconElement.style.color = '#ef4444';
+            }
+        } else {
+            element.classList.remove('afilia-aao-selected');
+
+            element.style.borderColor = '';
+            element.style.backgroundColor = '';
+            element.style.boxShadow = '';
+
+            const icon = element.querySelector('.afilia-aao-icon');
+
+            if (icon) {
+                icon.style.backgroundColor = '';
+            }
+
+            const iconElement = element.querySelector('.afilia-aao-icon i');
+
+            if (iconElement) {
+                iconElement.style.color = '';
+            }
+        }
+    }
+
+    function updateDispatchAlarmButton(dialog) {
+        if (!dialog) {
+            return;
+        }
+
+        const button = Array.from(
+            dialog.querySelectorAll('button')
+        ).find(button => {
+            return button.textContent.includes('Alarmieren');
+        });
+
+        if (!button) {
+            return;
+        }
+
+        const count = selectedAAOs.size;
+
+
+        if (count === 0) {
+            return;
+        }
+    }
+
+
+    function triggerOriginalAAO(key) {
+        let original = originalAAORows.get(key);
+
+
+        const dispatchDialog = findDispatchDialog();
+
+        if (dispatchDialog) {
+            const list = findDispatchList(dispatchDialog);
+
+            if (list) {
+                const cards = getDispatchCards(list);
+
+                for (const card of cards) {
+                    const nameElement = card.querySelector(
+                        'div.font-semibold.text-sm.text-gray-900'
+                    );
+
+                    if (!nameElement) {
+                        continue;
+                    }
+
+                    const name = nameElement.textContent.trim();
+
+                    if (getAAOKey(name) === key) {
+                        original = card;
+                        originalAAORows.set(key, card);
+                        break;
+                    }
+                }
+            }
+        }
+
+
+        if (!original || !original.isConnected) {
+            const settingsContainer = findSettingsAAOContainer();
+
+            if (settingsContainer) {
+                const rows = Array.from(
+                    settingsContainer.querySelectorAll(
+                        ':scope > [data-slot="sortable-item"]'
+                    )
+                );
+
+                for (const row of rows) {
+                    const nameElement = row.querySelector(
+                        'span.font-semibold'
+                    );
+
+                    if (!nameElement) {
+                        continue;
+                    }
+
+                    if (
+                        getAAOKey(nameElement.textContent.trim()) === key
+                    ) {
+                        original = row;
+                        originalAAORows.set(key, row);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (original && typeof original.click === 'function') {
+
+            original.click();
+
+            return true;
+        }
+
+        console.warn(
+            '[Afilia AAO Categories] Could not find original AAO:',
+            key
+        );
+
+        return false;
+    }
+
+    function toggleAAOSelection(key) {
+        const currentlySelected = selectedAAOs.has(key);
+
+
+        if (currentlySelected) {
+            selectedAAOs.delete(key);
+        } else {
+            selectedAAOs.add(key);
+        }
+
+        updateAllDispatchItems();
+
+        triggerOriginalAAO(key);
+
+        setTimeout(() => {
+            updateAllDispatchItems();
+
+            const dialog = findDispatchDialog();
+
+            if (dialog) {
+                updateDispatchAlarmButton(dialog);
+            }
+        }, 0);
+
+        setTimeout(() => {
+            updateAllDispatchItems();
+        }, 50);
+    }
+
+    /* =========================================================
+       Dispatch category UI
+       ========================================================= */
+
+    function getAAOsForCategory(categoryID) {
+        return Array.from(aaoCatalog.values())
+            .filter(aao => {
+                return assignments[aao.key] === categoryID;
+            })
+            .sort((a, b) => {
+                return a.name.localeCompare(
+                    b.name,
+                    'de',
+                    { sensitivity: 'base' }
+                );
+            });
+    }
+
+    function getUncategorizedAAOs() {
+        return Array.from(aaoCatalog.values())
+            .filter(aao => !getCategoryForAAO(aao.key))
+            .sort((a, b) => {
+                return a.name.localeCompare(
+                    b.name,
+                    'de',
+                    { sensitivity: 'base' }
+                );
+            });
+    }
+
+    function createDispatchAAOElement(aao) {
+        const selected = isAAOSelected(aao.key);
+
+        const element = document.createElement('div');
+
+        element.className =
+            'flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all';
+
+        element.dataset.afiliaAAOKey = aao.key;
+
+        element.style.borderColor = selected
+            ? '#ef4444'
+            : '#e5e7eb';
+
+        element.style.backgroundColor = selected
+            ? '#fef2f2'
+            : '#ffffff';
+
+        element.style.boxShadow = selected
+            ? '0 1px 2px rgba(239,68,68,0.12), 0 8px 20px -6px rgba(239,68,68,0.25)'
+            : '0 1px 2px rgba(16,24,40,0.04), 0 8px 20px -6px rgba(16,24,40,0.16)';
+
+        element.innerHTML = `
+            <div
+                class="afilia-aao-icon w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+                style="background:${selected ? '#fee2e2' : '#eff6ff'}"
+            >
+                <i
+                    class="fa-solid text-sm fa-shuffle"
+                    style="color:${selected ? '#ef4444' : '#3b82f6'}"
+                ></i>
+            </div>
+
+            <div class="flex-1 min-w-0">
+                <div
+                    class="font-semibold text-sm"
+                    style="color:${selected ? '#dc2626' : '#111827'}"
+                >
+                    ${escapeHTML(aao.name)}
+                </div>
+
+                <div class="text-xs text-gray-500 font-mono truncate">
+                    ${escapeHTML(aao.summary)}
+                </div>
+            </div>
+        `;
+
+        element.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            toggleAAOSelection(aao.key);
+        });
+
+        return element;
+    }
+
+    function createDispatchCategoryElement(category) {
+        const wrapper = document.createElement('div');
+
+        wrapper.className = 'afilia-dispatch-category';
+        wrapper.dataset.categoryID = category.id;
+
+        const header = document.createElement('button');
+
+        header.type = 'button';
+        header.className = 'afilia-dispatch-category-header';
+
+        const items = getAAOsForCategory(category.id);
+
+        header.innerHTML = `
+            <span class="afilia-dispatch-category-arrow">
+                ${category.collapsed ? '▶' : '▼'}
+            </span>
+
+            <span class="afilia-dispatch-category-name">
+                ${escapeHTML(category.name)}
+            </span>
+
+            <span class="afilia-dispatch-category-count">
+                ${items.length}
+            </span>
+        `;
+
+        const content = document.createElement('div');
+
+        content.className = 'afilia-dispatch-category-content';
+
+        if (category.collapsed) {
+            content.style.display = 'none';
+        }
+
+        for (const aao of items) {
+            content.appendChild(
+                createDispatchAAOElement(aao)
+            );
+        }
+
+        header.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            category.collapsed = !category.collapsed;
+
+            saveCategories().catch(console.error);
+
+            renderDispatchPanel();
+        });
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(content);
+
+        return wrapper;
+    }
+
+    function createUncategorizedElement() {
+        const items = getUncategorizedAAOs();
+
+        if (items.length === 0) {
+            return null;
+        }
+
+        const category = {
+            id: '__uncategorized__',
+            name: 'Nicht zugeordnet',
+            collapsed: false
+        };
+
+        const wrapper = document.createElement('div');
+
+        wrapper.className = 'afilia-dispatch-category';
+
+        const header = document.createElement('div');
+
+        header.className =
+            'afilia-dispatch-category-header afilia-dispatch-uncategorized';
+
+        header.innerHTML = `
+            <span class="afilia-dispatch-category-arrow">▼</span>
+            <span class="afilia-dispatch-category-name">
+                ${category.name}
+            </span>
+            <span class="afilia-dispatch-category-count">
+                ${items.length}
+            </span>
+        `;
+
+        const content = document.createElement('div');
+
+        content.className = 'afilia-dispatch-category-content';
+
+        for (const aao of items) {
+            content.appendChild(
+                createDispatchAAOElement(aao)
+            );
+        }
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(content);
+
+        return wrapper;
+    }
+
+    function renderDispatchPanel() {
+        const dialog = findDispatchDialog();
+
+        if (!dialog) {
+            return;
+        }
+
+        const list = findDispatchList(dialog);
+
+        if (!list) {
+            return;
+        }
+
+        let panel = dialog.querySelector(
+            `#${DISPATCH_PANEL_ID}`
+        );
+
+        if (!panel) {
+            panel = document.createElement('div');
+
+            panel.id = DISPATCH_PANEL_ID;
+            panel.className = 'afilia-dispatch-panel';
+
+            list.parentElement.insertBefore(
+                panel,
+                list
+            );
+        }
+
+
+        list.style.display = 'none';
+
+        panel.innerHTML = '';
+
+        const search = dispatchSearchValue.trim().toLowerCase();
+
+        const originalCatalog = Array.from(aaoCatalog.values());
+
+        for (const category of categories) {
+            const items = getAAOsForCategory(category.id)
+                .filter(aao => {
+                    if (!search) {
+                        return true;
+                    }
+
+                    return (
+                        aao.name.toLowerCase().includes(search) ||
+                        aao.summary.toLowerCase().includes(search)
+                    );
+                });
+
+            if (items.length === 0) {
+                continue;
+            }
+
+            const wrapper = document.createElement('div');
+
+            wrapper.className = 'afilia-dispatch-category';
+
+            const header = document.createElement('button');
+
+            header.type = 'button';
+            header.className =
+                'afilia-dispatch-category-header';
+
+            header.innerHTML = `
+                <span class="afilia-dispatch-category-arrow">
+                    ${category.collapsed ? '▶' : '▼'}
+                </span>
+
+                <span class="afilia-dispatch-category-name">
+                    ${escapeHTML(category.name)}
+                </span>
+
+                <span class="afilia-dispatch-category-count">
+                    ${items.length}
+                </span>
+            `;
+
+            const content = document.createElement('div');
+
+            content.className =
+                'afilia-dispatch-category-content';
+
+            if (category.collapsed) {
+                content.style.display = 'none';
+            }
+
+            for (const aao of items) {
+                content.appendChild(
+                    createDispatchAAOElement(aao)
+                );
+            }
+
+            header.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                category.collapsed = !category.collapsed;
+
+                saveCategories().catch(console.error);
+
+                renderDispatchPanel();
+            });
+
+            wrapper.appendChild(header);
+            wrapper.appendChild(content);
+
+            panel.appendChild(wrapper);
+        }
+
+
+        const uncategorized = originalCatalog
+            .filter(aao => !getCategoryForAAO(aao.key))
+            .filter(aao => {
+                if (!search) {
+                    return true;
+                }
+
+                return (
+                    aao.name.toLowerCase().includes(search) ||
+                    aao.summary.toLowerCase().includes(search)
+                );
+            })
+            .sort((a, b) => {
+                return a.name.localeCompare(
+                    b.name,
+                    'de',
+                    { sensitivity: 'base' }
+                );
+            });
+
+        if (uncategorized.length > 0) {
+            const wrapper = document.createElement('div');
+
+            wrapper.className = 'afilia-dispatch-category';
+
+            const header = document.createElement('div');
+
+            header.className =
+                'afilia-dispatch-category-header afilia-dispatch-uncategorized';
+
+            header.innerHTML = `
+                <span class="afilia-dispatch-category-arrow">▼</span>
+
+                <span class="afilia-dispatch-category-name">
+                    Nicht zugeordnet
+                </span>
+
+                <span class="afilia-dispatch-category-count">
+                    ${uncategorized.length}
+                </span>
+            `;
+
+            const content = document.createElement('div');
+
+            content.className =
+                'afilia-dispatch-category-content';
+
+            for (const aao of uncategorized) {
+                content.appendChild(
+                    createDispatchAAOElement(aao)
+                );
+            }
+
+            wrapper.appendChild(header);
+            wrapper.appendChild(content);
+
+            panel.appendChild(wrapper);
+        }
+
+        updateAllDispatchItems();
+    }
+
+    function updateAllDispatchItems() {
+        const panel = document.querySelector(
+            `#${DISPATCH_PANEL_ID}`
+        );
+
+        if (!panel) {
+            return;
+        }
+
+        panel.querySelectorAll(
+            '[data-afilia-aao-key]'
+        ).forEach(element => {
+            const key = element.dataset.afiliaAAOKey;
+
+            setSelectedVisual(
+                element,
+                selectedAAOs.has(key)
+            );
+
+            const name = element.querySelector(
+                '.font-semibold'
+            );
+
+            if (name) {
+                name.style.color = selectedAAOs.has(key)
+                    ? '#dc2626'
+                    : '#111827';
+            }
+        });
+    }
+
+    /* =========================================================
+       Settings UI
+       ========================================================= */
+
+    function createSettingsPanel() {
+        const panel = document.createElement('div');
+
+        panel.id = SETTINGS_PANEL_ID;
+
+        return panel;
+    }
+
+    function renderSettingsPanel() {
+        const container = findSettingsAAOContainer();
+
+        if (!container) {
+            return;
+        }
+
+        let panel = document.querySelector(
+            `#${SETTINGS_PANEL_ID}`
+        );
+
+        if (!panel) {
+            panel = createSettingsPanel();
+
+            container.parentElement.insertBefore(
+                panel,
+                container
+            );
+        }
+
+        container.style.display = 'none';
+
+        panel.innerHTML = '';
+
+        const header = document.createElement('div');
+
+        header.className = 'afilia-settings-header';
+
+        header.innerHTML = `
+            <div>
+                <div class="afilia-settings-title">
+                    AAO Kategorien
+                </div>
+
+                <div class="afilia-settings-subtitle">
+                    Ordne jede AAO einer Kategorie zu.
+                </div>
+            </div>
+
+            <button
+                type="button"
+                class="afilia-add-category"
+            >
+                + Kategorie
+            </button>
+        `;
+
+        panel.appendChild(header);
+
+        header.querySelector(
+            '.afilia-add-category'
+        ).addEventListener('click', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const name = prompt(
+                'Name der neuen Kategorie:'
+            );
+
+            if (!name || !name.trim()) {
+                return;
+            }
+
+            categories.push({
+                id: createID('category'),
+                name: name.trim(),
+                collapsed: false
+            });
+
+            await saveCategories();
+
+            renderSettingsPanel();
+            renderDispatchPanel();
+        });
+
+        for (const category of categories) {
+            const section = document.createElement('div');
+
+            section.className =
+                'afilia-settings-category';
+
+            const categoryHeader = document.createElement('div');
+
+            categoryHeader.className =
+                'afilia-settings-category-header';
+
+            categoryHeader.innerHTML = `
+                <button
+                    type="button"
+                    class="afilia-category-collapse"
+                >
+                    ${category.collapsed ? '▶' : '▼'}
+                </button>
+
+                <span class="afilia-category-name">
+                    ${escapeHTML(category.name)}
+                </span>
+
+                <span class="afilia-category-actions">
+                    <button
+                        type="button"
+                        class="afilia-category-rename"
+                        title="Kategorie umbenennen"
+                    >
+                        ✎
+                    </button>
+
+                    <button
+                        type="button"
+                        class="afilia-category-delete"
+                        title="Kategorie löschen"
+                    >
+                        ×
+                    </button>
+                </span>
+            `;
+
+            section.appendChild(categoryHeader);
+
+            const content = document.createElement('div');
+
+            content.className =
+                'afilia-settings-category-content';
+
+            if (category.collapsed) {
+                content.style.display = 'none';
+            }
+
+            const aaos = Array.from(aaoCatalog.values())
+                .filter(aao => {
+                    return assignments[aao.key] === category.id;
+                })
+                .sort((a, b) => {
+                    return a.name.localeCompare(
+                        b.name,
+                        'de',
+                        { sensitivity: 'base' }
+                    );
+                });
+
+            for (const aao of aaos) {
+                content.appendChild(
+                    createSettingsAAORow(aao)
+                );
+            }
+
+            categoryHeader.querySelector(
+                '.afilia-category-collapse'
+            ).addEventListener('click', async event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                category.collapsed = !category.collapsed;
+
+                await saveCategories();
+
+                renderSettingsPanel();
+                renderDispatchPanel();
+            });
+
+            categoryHeader.querySelector(
+                '.afilia-category-rename'
+            ).addEventListener('click', async event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const newName = prompt(
+                    'Neuer Kategoriename:',
+                    category.name
+                );
+
+                if (!newName || !newName.trim()) {
+                    return;
+                }
+
+                category.name = newName.trim();
+
+                await saveCategories();
+
+                renderSettingsPanel();
+                renderDispatchPanel();
+            });
+
+            categoryHeader.querySelector(
+                '.afilia-category-delete'
+            ).addEventListener('click', async event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const usedBy = Object.values(assignments)
+                    .filter(id => id === category.id)
+                    .length;
+
+                const message = usedBy > 0
+                    ? `Die Kategorie "${category.name}" enthält ${usedBy} AAO(s).\n\nDiese AAOs werden anschließend nicht zugeordnet sein.\n\nKategorie löschen?`
+                    : `Kategorie "${category.name}" löschen?`;
+
+                if (!confirm(message)) {
+                    return;
+                }
+
+                for (const key of Object.keys(assignments)) {
+                    if (assignments[key] === category.id) {
+                        delete assignments[key];
+                    }
+                }
+
+                categories = categories.filter(
+                    item => item.id !== category.id
+                );
+
+                await saveCategories();
+                await saveAssignments();
+
+                renderSettingsPanel();
+                renderDispatchPanel();
+            });
+
+            section.appendChild(content);
+            panel.appendChild(section);
+        }
+
+
+        const uncategorized = getUncategorizedAAOs();
+
+        if (uncategorized.length > 0) {
+            const section = document.createElement('div');
+
+            section.className =
+                'afilia-settings-category afilia-uncategorized';
+
+            const headerElement = document.createElement('div');
+
+            headerElement.className =
+                'afilia-settings-category-header';
+
+            headerElement.innerHTML = `
+                <div>
+                    <div class="afilia-category-name">
+                        Nicht zugeordnet
+                    </div>
+
+                    <div class="afilia-settings-subtitle">
+                        ${uncategorized.length} AAO(s)
+                    </div>
+                </div>
+            `;
+
+            section.appendChild(headerElement);
+
+            const content = document.createElement('div');
+
+            content.className =
+                'afilia-settings-category-content';
+
+            for (const aao of uncategorized) {
+                content.appendChild(
+                    createSettingsAAORow(aao)
+                );
+            }
+
+            section.appendChild(content);
+
+            panel.appendChild(section);
+        }
+    }
+
+    function createSettingsAAORow(aao) {
+        const row = document.createElement('div');
+
+        row.className =
+            'afilia-settings-aao-row';
+
+        const currentCategory =
+            getCategoryForAAO(aao.key);
+
+        row.innerHTML = `
+            <div class="afilia-settings-aao-info">
+                <div class="afilia-settings-aao-name">
+                    ${escapeHTML(aao.name)}
+                </div>
+
+                <div class="afilia-settings-aao-summary">
+                    ${escapeHTML(aao.summary)}
+                </div>
+            </div>
+
+            <select class="afilia-settings-aao-select">
+                <option value="">
+                    Nicht zugeordnet
+                </option>
+
+                ${categories.map(category => `
+                    <option
+                        value="${escapeHTML(category.id)}"
+                        ${currentCategory &&
+                        currentCategory.id === category.id
+                            ? 'selected'
+                            : ''}
+                    >
+                        ${escapeHTML(category.name)}
+                    </option>
+                `).join('')}
+            </select>
+
+            <button
+                type="button"
+                class="afilia-settings-edit"
+                title="AAO bearbeiten"
+            >
+                ✎
+            </button>
+        `;
+
+        const select = row.querySelector(
+            '.afilia-settings-aao-select'
+        );
+
+        select.addEventListener('change', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const value = select.value;
+
+            if (value) {
+                assignments[aao.key] = value;
+            } else {
+                delete assignments[aao.key];
+            }
+
+            await saveAssignments();
+
+            renderSettingsPanel();
+            renderDispatchPanel();
+        });
+
+
+        row.querySelector(
+            '.afilia-settings-edit'
+        ).addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const original = originalAAORows.get(aao.key);
+
+            if (!original) {
+                return;
+            }
+
+            const editButton = Array.from(
+                original.querySelectorAll('button')
+            ).find(button => {
+                const svg = button.querySelector('svg');
+
+                return svg && (
+                    svg.classList.contains('lucide-pencil') ||
+                    svg.getAttribute('class')?.includes('pencil')
+                );
+            });
+
+            if (editButton) {
+                editButton.click();
+            }
+        });
+
+        return row;
+    }
+
+    /* =========================================================
+       Search synchronization
+       ========================================================= */
+
+    function hookDispatchSearch(dialog) {
+        const input = dialog?.querySelector(
+            'input[placeholder="AAO suchen..."]'
+        );
+
+        if (!input) {
+            return;
+        }
+
+        if (input.dataset.afiliaSearchHooked === 'true') {
+            return;
+        }
+
+        input.dataset.afiliaSearchHooked = 'true';
+
+        input.addEventListener('input', () => {
+            dispatchSearchValue = input.value || '';
+
+            renderDispatchPanel();
+        });
+    }
+
+    /* =========================================================
+       CSS
+       ========================================================= */
+
+    function injectStyles() {
+        const style = document.createElement('style');
+
+        style.id = 'afilia-aao-category-styles';
+
+        style.textContent = `
+            /* =====================================================
+               Settings
+               ===================================================== */
+
             #${SETTINGS_PANEL_ID} {
+                position: relative;
+                z-index: 10;
+                width: 100%;
                 margin-bottom: 12px;
             }
 
-            #${DISPATCH_PANEL_ID} {
-                margin-top: 8px;
-                margin-bottom: 8px;
-            }
-
-            .afilias-aao-category {
-                width: 100%;
-                box-sizing: border-box;
-                border: 1px solid rgba(229, 231, 235, 0.95);
-                border-radius: 12px;
-                background: #fff;
-                overflow: hidden;
-                box-shadow:
-                    0 1px 2px rgba(16, 24, 40, 0.04),
-                    0 8px 20px -6px rgba(16, 24, 40, 0.10);
-            }
-
-            .afilias-aao-category + .afilias-aao-category {
-                margin-top: 8px;
-            }
-
-            .afilias-aao-category-header {
+            .afilia-settings-header {
                 display: flex;
                 align-items: center;
-                gap: 6px;
-                width: 100%;
-                min-height: 42px;
-                padding: 5px 8px;
-                box-sizing: border-box;
-                background: #fff;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 12px 14px;
+                margin-bottom: 10px;
+                border: 1px solid #e5e7eb;
+                border-radius: 12px;
+                background: #ffffff;
+            }
+
+            .afilia-settings-title {
+                font-size: 18px;
+                font-weight: 700;
                 color: #111827;
             }
 
-            .afilias-aao-category-toggle {
-                appearance: none;
+            .afilia-settings-subtitle {
+                margin-top: 2px;
+                font-size: 12px;
+                color: #6b7280;
+            }
+
+            .afilia-add-category {
+                border: 0;
+                border-radius: 8px;
+                padding: 8px 12px;
+                background: #ef4444;
+                color: white;
+                font-weight: 600;
+                cursor: pointer;
+            }
+
+            .afilia-add-category:hover {
+                background: #dc2626;
+            }
+
+            .afilia-settings-category {
+                margin-bottom: 10px;
+                border: 1px solid #e5e7eb;
+                border-radius: 12px;
+                overflow: hidden;
+                background: white;
+            }
+
+            .afilia-settings-category-header {
                 display: flex;
                 align-items: center;
                 gap: 8px;
-                flex: 1;
-                min-width: 0;
-                min-height: 32px;
-                padding: 4px 2px;
+                min-height: 46px;
+                padding: 8px 12px;
+                background: #f9fafb;
+                border-bottom: 1px solid #e5e7eb;
+            }
+
+            .afilia-category-collapse {
+                width: 28px;
+                height: 28px;
                 border: 0;
                 background: transparent;
-                color: inherit;
                 cursor: pointer;
-                text-align: left;
-                font: inherit;
-                border-radius: 7px;
-            }
-
-            .afilias-aao-category-toggle:hover {
-                background: #f9fafb;
-            }
-
-            .afilias-aao-chevron {
-                width: 18px;
-                text-align: center;
                 color: #6b7280;
-                font-size: 12px;
-                flex: 0 0 18px;
             }
 
-            .afilias-aao-category-name {
+            .afilia-category-name {
                 flex: 1;
-                min-width: 0;
-                font-size: 14px;
                 font-weight: 700;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
+                color: #111827;
             }
 
-            .afilias-aao-category-count {
+            .afilia-category-actions {
+                display: flex;
+                gap: 4px;
+            }
+
+            .afilia-category-actions button {
+                width: 30px;
+                height: 30px;
+                border: 0;
+                border-radius: 7px;
+                background: transparent;
+                cursor: pointer;
                 color: #6b7280;
-                font-size: 12px;
-                font-family:
-                    ui-monospace,
-                    SFMono-Regular,
-                    Menlo,
-                    Monaco,
-                    Consolas,
-                    monospace;
             }
 
-            .afilias-aao-category-body {
-                padding: 0 8px 8px;
+            .afilia-category-actions button:hover {
+                background: #e5e7eb;
+                color: #111827;
             }
 
-            .afilias-aao-item {
+            .afilia-category-delete:hover {
+                color: #dc2626 !important;
+                background: #fee2e2 !important;
+            }
+
+            .afilia-settings-category-content {
+                padding: 8px;
+            }
+
+            .afilia-settings-aao-row {
                 display: flex;
                 align-items: center;
                 gap: 10px;
-                width: 100%;
-                min-height: 44px;
-                padding: 8px 10px;
-                margin-top: 4px;
-                box-sizing: border-box;
-                border: 1px solid rgba(229, 231, 235, 0.95);
-                border-radius: 10px;
-                background: #fff;
-                color: #111827;
-                cursor: pointer;
-                text-align: left;
-                font: inherit;
-                transition:
-                    background 120ms ease,
-                    border-color 120ms ease,
-                    box-shadow 120ms ease,
-                    transform 120ms ease,
-                    color 120ms ease;
+                padding: 9px 10px;
+                border-radius: 9px;
             }
 
-            .afilias-aao-item:hover {
+            .afilia-settings-aao-row:hover {
                 background: #f9fafb;
-                border-color: #d1d5db;
-                box-shadow:
-                    0 2px 8px rgba(16, 24, 40, 0.08);
             }
 
-            .afilias-aao-item:active {
-                transform: translateY(1px);
-            }
-
-            /*
-             * Selected AAO
-             *
-             * This deliberately resembles the game's red
-             * selected state.
-             */
-            .afilias-aao-dispatch-item.is-selected {
-                border-color: #ef4444;
-                background: #fef2f2;
-                box-shadow:
-                    0 0 0 1px rgba(239, 68, 68, 0.10),
-                    0 4px 12px rgba(239, 68, 68, 0.10);
-            }
-
-            .afilias-aao-dispatch-item.is-selected
-            .afilias-aao-item-icon {
-                background: #fee2e2;
-                color: #ef4444;
-            }
-
-            .afilias-aao-dispatch-item.is-selected
-            .afilias-aao-item-name {
-                color: #b91c1c;
-            }
-
-            .afilias-aao-dispatch-item.is-selected
-            .afilias-aao-item-summary {
-                color: #dc2626;
-            }
-
-            .afilias-aao-item-icon {
-                width: 32px;
-                height: 32px;
-                border-radius: 10px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex: 0 0 32px;
-                background: #eff6ff;
-                color: #3b82f6;
-                font-size: 13px;
-            }
-
-            .afilias-aao-item-text {
-                min-width: 0;
+            .afilia-settings-aao-info {
                 flex: 1;
+                min-width: 0;
             }
 
-            .afilias-aao-item-name {
-                font-size: 13px;
-                line-height: 18px;
+            .afilia-settings-aao-name {
+                font-size: 14px;
                 font-weight: 600;
                 color: #111827;
                 overflow: hidden;
@@ -459,146 +1533,146 @@
                 white-space: nowrap;
             }
 
-            .afilias-aao-item-summary {
-                margin-top: 1px;
+            .afilia-settings-aao-summary {
+                margin-top: 2px;
                 font-size: 11px;
-                line-height: 16px;
+                font-family: monospace;
                 color: #6b7280;
-                font-family:
-                    ui-monospace,
-                    SFMono-Regular,
-                    Menlo,
-                    Monaco,
-                    Consolas,
-                    monospace;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
 
-            .afilias-aao-settings-toolbar {
+            .afilia-settings-aao-select {
+                min-width: 170px;
+                max-width: 230px;
+                height: 34px;
+                padding: 0 8px;
+                border: 1px solid #d1d5db;
+                border-radius: 8px;
+                background: white;
+                color: #111827;
+                cursor: pointer;
+            }
+
+            .afilia-settings-edit {
+                width: 34px;
+                height: 34px;
+                flex-shrink: 0;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                background: white;
+                cursor: pointer;
+            }
+
+            .afilia-settings-edit:hover {
+                background: #f3f4f6;
+            }
+
+            /* =====================================================
+               Dispatch
+               ===================================================== */
+
+            #${DISPATCH_PANEL_ID} {
+                width: 100%;
+                padding-bottom: 6px;
+            }
+
+            .afilia-dispatch-category {
+                margin-bottom: 8px;
+            }
+
+            .afilia-dispatch-category-header {
+                width: 100%;
+                min-height: 42px;
                 display: flex;
-                flex-wrap: wrap;
                 align-items: center;
                 gap: 8px;
-                margin-bottom: 10px;
-            }
-
-            .afilias-aao-settings-title {
-                font-size: 18px;
-                font-weight: 700;
-                margin-right: auto;
-                color: #111827;
-            }
-
-            .afilias-aao-action-button {
-                appearance: none;
-                border: 1px solid #d1d5db;
-                background: #fff;
-                color: #374151;
-                border-radius: 8px;
-                padding: 7px 10px;
-                font: inherit;
-                font-size: 13px;
-                cursor: pointer;
-            }
-
-            .afilias-aao-action-button:hover {
-                background: #f9fafb;
-                border-color: #9ca3af;
-            }
-
-            .afilias-aao-action-button.primary {
-                background: #dc2626;
-                color: #fff;
-                border-color: #dc2626;
-            }
-
-            .afilias-aao-action-button.primary:hover {
-                background: #b91c1c;
-                border-color: #b91c1c;
-            }
-
-            .afilias-aao-empty {
-                padding: 14px;
-                color: #6b7280;
-                font-size: 13px;
-                text-align: center;
-                border: 1px dashed #d1d5db;
-                border-radius: 10px;
-                background: #fafafa;
-            }
-
-            .afilias-aao-settings-assignment {
-                margin-left: auto;
-                flex: 0 0 auto;
-                max-width: 190px;
-            }
-
-            .afilias-aao-settings-assignment select {
-                width: 100%;
-                box-sizing: border-box;
-                border: 1px solid #d1d5db;
-                border-radius: 7px;
-                background: #fff;
-                padding: 5px 7px;
-                color: #374151;
-                font: inherit;
-                font-size: 12px;
-            }
-
-            .afilias-aao-settings-row {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                width: 100%;
-                box-sizing: border-box;
-            }
-
-            .afilias-aao-settings-row
-            .afilias-aao-item-text {
-                flex: 1;
-            }
-
-            .afilias-aao-settings-actions {
-                display: flex;
-                gap: 4px;
-                flex: 0 0 auto;
-            }
-
-            .afilias-aao-small-button {
-                width: 30px;
-                height: 30px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
+                padding: 8px 12px;
                 border: 1px solid #e5e7eb;
-                border-radius: 7px;
-                background: #fff;
-                color: #6b7280;
-                cursor: pointer;
-                font: inherit;
-            }
-
-            .afilias-aao-small-button:hover {
+                border-radius: 10px;
                 background: #f9fafb;
                 color: #111827;
+                cursor: pointer;
+                text-align: left;
             }
 
-            .afilias-aao-small-button.danger:hover {
-                color: #dc2626;
-                border-color: #fecaca;
-                background: #fef2f2;
+            .afilia-dispatch-category-header:hover {
+                background: #f3f4f6;
             }
+
+            .afilia-dispatch-category-arrow {
+                width: 18px;
+                flex-shrink: 0;
+                color: #6b7280;
+                font-size: 11px;
+            }
+
+            .afilia-dispatch-category-name {
+                flex: 1;
+                font-weight: 700;
+                font-size: 14px;
+            }
+
+            .afilia-dispatch-category-count {
+                min-width: 24px;
+                padding: 2px 7px;
+                border-radius: 999px;
+                background: #e5e7eb;
+                color: #4b5563;
+                font-size: 11px;
+                font-weight: 700;
+                text-align: center;
+            }
+
+            .afilia-dispatch-category-content {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                padding-top: 8px;
+            }
+
+            .afilia-dispatch-category-content
+            > [data-afilia-aao-key] {
+                min-height: 60px;
+            }
+
+            .afilia-dispatch-category-content
+            > [data-afilia-aao-key]:hover {
+                border-color: #fca5a5 !important;
+            }
+
+            .afilia-dispatch-uncategorized {
+                cursor: default;
+            }
+
+            .afilia-dispatch-uncategorized:hover {
+                background: #f9fafb;
+            }
+
+            .afilia-aao-selected {
+                border-color: #ef4444 !important;
+                background-color: #fef2f2 !important;
+            }
+
+            /* =====================================================
+               Mobile
+               ===================================================== */
 
             @media (max-width: 640px) {
-                .afilias-aao-settings-assignment {
-                    max-width: 145px;
+                .afilia-settings-aao-row {
+                    flex-wrap: wrap;
                 }
 
-                .afilias-aao-settings-title {
+                .afilia-settings-aao-info {
                     width: 100%;
-                    margin-right: 0;
+                    flex-basis: 100%;
+                }
+
+                .afilia-settings-aao-select {
+                    flex: 1;
+                    min-width: 0;
+                    max-width: none;
                 }
             }
         `;
@@ -606,1541 +1680,139 @@
         document.head.appendChild(style);
     }
 
-    // =========================================================
-    // Game Settings
-    // =========================================================
+    /* =========================================================
+       Main scanning
+       ========================================================= */
 
-    function getElementText(element, selector) {
-        const target =
-            element.querySelector(selector);
+    function scan() {
 
-        return normalizeText(
-            target?.textContent || ''
-        );
-    }
+        discoverAAOs();
 
-    function extractAAOFromSettingsRow(row) {
-        const name =
-            getElementText(
-                row,
-                'span.font-semibold'
-            );
+        const settingsContainer =
+            findSettingsAAOContainer();
 
-        if (!name) {
-            return null;
-        }
-
-        const summary =
-            getElementText(
-                row,
-                'span.font-mono'
-            );
-
-        return {
-            row,
-            name,
-            summary,
-            key: getAAOKey(name)
-        };
-    }
-
-    function findSettingsAAOContainer() {
-        const candidates =
-            Array.from(
-                document.querySelectorAll(
-                    '[data-slot="sortable-content"]'
-                )
-            );
-
-        return candidates.find(
-            container =>
-                container.querySelector(
-                    '[data-slot="sortable-item-handle"][title="AAO verschieben"]'
-                )
-        ) || null;
-    }
-
-    function findSettingsRows(container) {
-        if (!container) {
-            return [];
-        }
-
-        return Array.from(
-            container.querySelectorAll(
-                ':scope > [data-slot="sortable-item"]'
-            )
-        )
-            .map(
-                extractAAOFromSettingsRow
-            )
-            .filter(Boolean);
-    }
-
-    // =========================================================
-    // Dispatch Window
-    // =========================================================
-
-    function findDispatchSheet() {
-        const sheets =
-            Array.from(
-                document.querySelectorAll(
-                    '[data-slot="sheet-content"]'
-                )
-            );
-
-        return sheets.find(
-            sheet =>
-                sheet.querySelector(
-                    'input[placeholder="AAO suchen..."]'
-                )
-        ) || null;
-    }
-
-    function findDispatchSearchInput(sheet) {
-        return sheet?.querySelector(
-            'input[placeholder="AAO suchen..."]'
-        ) || null;
-    }
-
-    function getDispatchRows(list) {
-        if (!list) {
-            return [];
-        }
-
-        return Array.from(
-            list.children
-        )
-            .filter(
-                element =>
-                    element instanceof HTMLElement
-            )
-            .map(row => {
-                const name =
-                    getElementText(
-                        row,
-                        '.font-semibold.text-sm.text-gray-900'
-                    );
-
-                if (!name) {
-                    return null;
-                }
-
-                const summary =
-                    getElementText(
-                        row,
-                        '.text-xs.text-gray-500.font-mono'
-                    );
-
-                return {
-                    row,
-                    name,
-                    summary,
-                    key: getAAOKey(name)
-                };
-            })
-            .filter(Boolean);
-    }
-
-    function findDispatchList(sheet) {
-        const searchInput =
-            findDispatchSearchInput(
-                sheet
-            );
-
-        if (!searchInput) {
-            return null;
-        }
-
-        const scrollContainer =
-            searchInput.closest(
-                '.flex-1.overflow-y-auto.min-h-0'
-            );
-
-        if (scrollContainer) {
-            const list =
-                scrollContainer.querySelector(
-                    ':scope > .space-y-2'
-                );
+        if (settingsContainer) {
 
             if (
-                list &&
-                getDispatchRows(list).length > 0
+                settingsContainer !== lastSettingsContainer ||
+                !document.querySelector(
+                    `#${SETTINGS_PANEL_ID}`
+                )
             ) {
-                return list;
+                lastSettingsContainer = settingsContainer;
+
+                renderSettingsPanel();
             }
+        } else {
+            lastSettingsContainer = null;
         }
 
-        const candidates =
-            Array.from(
-                sheet.querySelectorAll(
-                    '.space-y-2'
-                )
-            );
 
-        return candidates.find(
-            candidate =>
-                getDispatchRows(
-                    candidate
-                ).length > 0
-        ) || null;
-    }
+        const dispatchDialog = findDispatchDialog();
 
-    // =========================================================
-    // Category UI
-    // =========================================================
+        if (dispatchDialog) {
+            hookDispatchSearch(dispatchDialog);
 
-    function createCategoryHeader(
-        category,
-        count,
-        onClick,
-        options = {}
-    ) {
-        const header =
-            document.createElement('div');
+            const list = findDispatchList(dispatchDialog);
 
-        header.className =
-            'afilias-aao-category-header';
-
-        const toggle =
-            document.createElement('button');
-
-        toggle.type = 'button';
-
-        toggle.className =
-            'afilias-aao-category-toggle';
-
-        toggle.title =
-            category.collapsed
-                ? 'Kategorie öffnen'
-                : 'Kategorie einklappen';
-
-        toggle.setAttribute(
-            'aria-expanded',
-            String(!category.collapsed)
-        );
-
-        toggle.innerHTML = `
-            <span class="afilias-aao-chevron">
-                ${category.collapsed ? '▶' : '▼'}
-            </span>
-
-            <span class="afilias-aao-category-name">
-                ${escapeHtml(category.name)}
-            </span>
-
-            <span class="afilias-aao-category-count">
-                ${count}
-            </span>
-        `;
-
-        toggle.addEventListener(
-            'click',
-            onClick
-        );
-
-        header.appendChild(
-            toggle
-        );
-
-        if (options.management) {
-            const actions =
-                document.createElement('div');
-
-            actions.className =
-                'afilias-aao-settings-actions';
-
-            const edit =
-                document.createElement('button');
-
-            edit.type = 'button';
-
-            edit.className =
-                'afilias-aao-small-button';
-
-            edit.title =
-                'Kategorie umbenennen';
-
-            edit.textContent = '✎';
-
-            edit.addEventListener(
-                'click',
-                event => {
-                    event.stopPropagation();
-                    options.onRename?.();
-                }
-            );
-
-            const remove =
-                document.createElement('button');
-
-            remove.type = 'button';
-
-            remove.className =
-                'afilias-aao-small-button danger';
-
-            remove.title =
-                'Kategorie löschen';
-
-            remove.textContent = '×';
-
-            remove.addEventListener(
-                'click',
-                event => {
-                    event.stopPropagation();
-                    options.onDelete?.();
-                }
-            );
-
-            actions.appendChild(edit);
-            actions.appendChild(remove);
-
-            header.appendChild(actions);
-        }
-
-        return header;
-    }
-
-    function createCategoryElement(
-        category,
-        count,
-        onToggle,
-        options = {}
-    ) {
-        const wrapper =
-            document.createElement('section');
-
-        wrapper.className =
-            'afilias-aao-category';
-
-        const header =
-            createCategoryHeader(
-                category,
-                count,
-                onToggle,
-                options
-            );
-
-        wrapper.appendChild(
-            header
-        );
-
-        if (!category.collapsed) {
-            const body =
-                document.createElement('div');
-
-            body.className =
-                'afilias-aao-category-body';
-
-            wrapper.appendChild(
-                body
-            );
-
-            options.populateBody?.(
-                body
-            );
-        }
-
-        return wrapper;
-    }
-
-    // =========================================================
-    // Settings Panel
-    // =========================================================
-
-    function buildSettingsPanel(
-        container,
-        rows,
-        categories,
-        assignments
-    ) {
-        let panel =
-            document.getElementById(
-                SETTINGS_PANEL_ID
-            );
-
-        if (!panel) {
-            panel =
-                document.createElement('div');
-
-            panel.id =
-                SETTINGS_PANEL_ID;
-
-            const parent =
-                container.parentElement;
-
-            if (!parent) {
-                return;
-            }
-
-            parent.insertBefore(
-                panel,
-                container
-            );
-        }
-
-        panel.replaceChildren();
-
-        const toolbar =
-            document.createElement('div');
-
-        toolbar.className =
-            'afilias-aao-settings-toolbar';
-
-        const title =
-            document.createElement('div');
-
-        title.className =
-            'afilias-aao-settings-title';
-
-        title.textContent =
-            'AAO Kategorien';
-
-        toolbar.appendChild(
-            title
-        );
-
-        const addButton =
-            document.createElement('button');
-
-        addButton.type = 'button';
-
-        addButton.className =
-            'afilias-aao-action-button primary';
-
-        addButton.textContent =
-            '+ Kategorie';
-
-        addButton.addEventListener(
-            'click',
-            async () => {
-                const name =
-                    prompt(
-                        'Name der neuen Kategorie:'
-                    );
-
+            if (list) {
                 if (
-                    !name ||
-                    !normalizeText(name)
-                ) {
-                    return;
-                }
-
-                const cleanName =
-                    normalizeText(name);
-
-                if (
-                    categories.some(
-                        category =>
-                            category.name.toLowerCase() ===
-                            cleanName.toLowerCase()
+                    dispatchDialog !== lastDispatchContainer ||
+                    !document.querySelector(
+                        `#${DISPATCH_PANEL_ID}`
                     )
                 ) {
-                    alert(
-                        'Eine Kategorie mit diesem Namen existiert bereits.'
-                    );
-                    return;
-                }
+                    lastDispatchContainer = dispatchDialog;
 
-                categories.push({
-                    id: randomId(),
-                    name: cleanName,
-                    collapsed: false
-                });
-
-                await saveCategories(
-                    categories
-                );
-
-                scheduleScan(0);
-            }
-        );
-
-        toolbar.appendChild(
-            addButton
-        );
-
-        panel.appendChild(
-            toolbar
-        );
-
-        for (const category of categories) {
-            const categoryRows =
-                rows.filter(
-                    row =>
-                        assignments[row.key] ===
-                        category.id
-                );
-
-            const section =
-                createCategoryElement(
-                    category,
-                    categoryRows.length,
-                    async () => {
-                        category.collapsed =
-                            !category.collapsed;
-
-                        await saveCategories(
-                            categories
-                        );
-
-                        scheduleScan(0);
-                    },
-                    {
-                        management: true,
-
-                        onRename:
-                            async () => {
-                                const name =
-                                    prompt(
-                                        'Neuer Name der Kategorie:',
-                                        category.name
-                                    );
-
-                                if (
-                                    !name ||
-                                    !normalizeText(name)
-                                ) {
-                                    return;
-                                }
-
-                                const cleanName =
-                                    normalizeText(name);
-
-                                if (
-                                    categories.some(
-                                        other =>
-                                            other.id !==
-                                                category.id &&
-                                            other.name.toLowerCase() ===
-                                                cleanName.toLowerCase()
-                                    )
-                                ) {
-                                    alert(
-                                        'Eine Kategorie mit diesem Namen existiert bereits.'
-                                    );
-                                    return;
-                                }
-
-                                category.name =
-                                    cleanName;
-
-                                await saveCategories(
-                                    categories
-                                );
-
-                                scheduleScan(0);
-                            },
-
-                        onDelete:
-                            async () => {
-                                if (
-                                    !confirm(
-                                        `Kategorie „${category.name}“ wirklich löschen? ` +
-                                        `Die AAOs werden nicht gelöscht.`
-                                    )
-                                ) {
-                                    return;
-                                }
-
-                                for (
-                                    const key of
-                                    Object.keys(
-                                        assignments
-                                    )
-                                ) {
-                                    if (
-                                        assignments[key] ===
-                                        category.id
-                                    ) {
-                                        delete assignments[
-                                            key
-                                        ];
-                                    }
-                                }
-
-                                categories.splice(
-                                    categories.indexOf(
-                                        category
-                                    ),
-                                    1
-                                );
-
-                                await saveAssignments(
-                                    assignments
-                                );
-
-                                await saveCategories(
-                                    categories
-                                );
-
-                                scheduleScan(0);
-                            },
-
-                        populateBody:
-                            body => {
-                                for (
-                                    const row of
-                                    categoryRows
-                                ) {
-                                    body.appendChild(
-                                        createSettingsAAORow(
-                                            row,
-                                            categories,
-                                            assignments
-                                        )
-                                    );
-                                }
-                            }
-                    }
-                );
-
-            panel.appendChild(
-                section
-            );
-        }
-
-        const unassignedRows =
-            rows.filter(
-                row =>
-                    !assignments[row.key] ||
-                    !categories.some(
-                        category =>
-                            category.id ===
-                            assignments[row.key]
-                    )
-            );
-
-        const unassignedCategory = {
-            id: '__unassigned__',
-            name: 'Nicht zugeordnet',
-            collapsed: false
-        };
-
-        const unassignedSection =
-            createCategoryElement(
-                unassignedCategory,
-                unassignedRows.length,
-                () => {
-                    unassignedCategory.collapsed =
-                        !unassignedCategory.collapsed;
-
-                    scheduleScan(0);
-                },
-                {
-                    populateBody:
-                        body => {
-                            if (
-                                unassignedRows.length ===
-                                0
-                            ) {
-                                const empty =
-                                    document.createElement(
-                                        'div'
-                                    );
-
-                                empty.className =
-                                    'afilias-aao-empty';
-
-                                empty.textContent =
-                                    'Alle AAOs sind zugeordnet.';
-
-                                body.appendChild(
-                                    empty
-                                );
-                            } else {
-                                for (
-                                    const row of
-                                    unassignedRows
-                                ) {
-                                    body.appendChild(
-                                        createSettingsAAORow(
-                                            row,
-                                            categories,
-                                            assignments
-                                        )
-                                    );
-                                }
-                            }
-                        }
-                }
-            );
-
-        panel.appendChild(
-            unassignedSection
-        );
-
-        container.style.display =
-            'none';
-    }
-
-    // =========================================================
-    // Settings AAO Row
-    // =========================================================
-
-    function createSettingsAAORow(
-        row,
-        categories,
-        assignments
-    ) {
-        const wrapper =
-            document.createElement('div');
-
-        wrapper.className =
-            'afilias-aao-item';
-
-        const icon =
-            document.createElement('div');
-
-        icon.className =
-            'afilias-aao-item-icon';
-
-        icon.innerHTML =
-            '<i class="fa-solid fa-shuffle"></i>';
-
-        const text =
-            document.createElement('div');
-
-        text.className =
-            'afilias-aao-item-text';
-
-        const name =
-            document.createElement('div');
-
-        name.className =
-            'afilias-aao-item-name';
-
-        name.textContent =
-            row.name;
-
-        const summary =
-            document.createElement('div');
-
-        summary.className =
-            'afilias-aao-item-summary';
-
-        summary.textContent =
-            row.summary;
-
-        text.appendChild(name);
-
-        if (row.summary) {
-            text.appendChild(summary);
-        }
-
-        const assignment =
-            document.createElement('div');
-
-        assignment.className =
-            'afilias-aao-settings-assignment';
-
-        const select =
-            document.createElement('select');
-
-        select.title =
-            `Kategorie für ${row.name}`;
-
-        select.innerHTML =
-            '<option value="">Nicht zugeordnet</option>' +
-            categories
-                .map(
-                    category =>
-                        `<option value="${escapeHtml(category.id)}">` +
-                        `${escapeHtml(category.name)}` +
-                        `</option>`
-                )
-                .join('');
-
-        select.value =
-            assignments[row.key] || '';
-
-        select.addEventListener(
-            'click',
-            event => {
-                event.stopPropagation();
-            }
-        );
-
-        select.addEventListener(
-            'change',
-            async event => {
-                event.stopPropagation();
-
-                const value =
-                    event.target.value;
-
-                if (value) {
-                    assignments[row.key] =
-                        value;
+                    renderDispatchPanel();
                 } else {
-                    delete assignments[
-                        row.key
-                    ];
-                }
 
-                await saveAssignments(
-                    assignments
-                );
-
-                scheduleScan(0);
-            }
-        );
-
-        assignment.appendChild(
-            select
-        );
-
-        const actions =
-            document.createElement('div');
-
-        actions.className =
-            'afilias-aao-settings-actions';
-
-        const editButton =
-            document.createElement('button');
-
-        editButton.type = 'button';
-
-        editButton.className =
-            'afilias-aao-small-button';
-
-        editButton.title =
-            'AAO bearbeiten';
-
-        editButton.textContent =
-            '✎';
-
-        editButton.addEventListener(
-            'click',
-            event => {
-                event.stopPropagation();
-
-                const pencilIcon =
-                    row.row.querySelector(
-                        'svg.lucide-pencil, svg[class*="lucide-pencil"]'
-                    );
-
-                const original =
-                    pencilIcon?.closest(
-                        'button'
-                    ) ||
-                    Array.from(
-                        row.row.querySelectorAll(
-                            'button'
-                        )
-                    ).find(
-                        button =>
-                            !button.matches(
-                                '[data-slot="sortable-item-handle"]'
-                            ) &&
-                            !button.matches(
-                                '[data-slot="alert-dialog-trigger"]'
-                            )
-                    );
-
-                original?.click();
-            }
-        );
-
-        const deleteButton =
-            document.createElement('button');
-
-        deleteButton.type = 'button';
-
-        deleteButton.className =
-            'afilias-aao-small-button danger';
-
-        deleteButton.title =
-            'AAO löschen';
-
-        deleteButton.textContent =
-            '×';
-
-        deleteButton.addEventListener(
-            'click',
-            event => {
-                event.stopPropagation();
-
-                const original =
-                    row.row.querySelector(
-                        'button[data-slot="alert-dialog-trigger"]'
-                    );
-
-                original?.click();
-            }
-        );
-
-        actions.appendChild(
-            editButton
-        );
-
-        actions.appendChild(
-            deleteButton
-        );
-
-        const rowContent =
-            document.createElement('div');
-
-        rowContent.className =
-            'afilias-aao-settings-row';
-
-        rowContent.appendChild(icon);
-        rowContent.appendChild(text);
-        rowContent.appendChild(assignment);
-        rowContent.appendChild(actions);
-
-        wrapper.appendChild(
-            rowContent
-        );
-
-        return wrapper;
-    }
-
-    // =========================================================
-    // Dispatch Panel
-    // =========================================================
-
-    function buildDispatchPanel(
-        sheet,
-        list,
-        rows,
-        categories,
-        assignments
-    ) {
-        if (!sheet || !list) {
-            return;
-        }
-
-        let panel =
-            sheet.querySelector(
-                `#${DISPATCH_PANEL_ID}`
-            );
-
-        if (!panel) {
-            panel =
-                document.createElement('div');
-
-            panel.id =
-                DISPATCH_PANEL_ID;
-
-            list.parentElement?.insertBefore(
-                panel,
-                list
-            );
-        }
-
-        const searchInput =
-            findDispatchSearchInput(
-                sheet
-            );
-
-        const searchTerm =
-            normalizeText(
-                searchInput?.value || ''
-            ).toLowerCase();
-
-        /*
-         * Before rebuilding our UI, synchronize our selection
-         * state with the game's actual DOM where possible.
-         */
-        synchronizeSelectionFromGame(
-            rows
-        );
-
-        panel.replaceChildren();
-
-        const matchingRows =
-            searchTerm
-                ? rows.filter(
-                    row =>
-                        `${row.name} ${row.summary}`
-                            .toLowerCase()
-                            .includes(searchTerm)
-                )
-                : rows;
-
-        for (const category of categories) {
-            const categoryRows =
-                matchingRows.filter(
-                    row =>
-                        assignments[row.key] ===
-                        category.id
-                );
-
-            if (
-                categoryRows.length === 0
-            ) {
-                continue;
-            }
-
-            const section =
-                createCategoryElement(
-                    category,
-                    categoryRows.length,
-                    async () => {
-                        category.collapsed =
-                            !category.collapsed;
-
-                        await saveCategories(
-                            categories
-                        );
-
-                        scheduleScan(0);
-                    },
-                    {
-                        populateBody:
-                            body => {
-                                for (
-                                    const row of
-                                    categoryRows
-                                ) {
-                                    body.appendChild(
-                                        createDispatchAAORow(
-                                            row
-                                        )
-                                    );
-                                }
-                            }
-                    }
-                );
-
-            panel.appendChild(
-                section
-            );
-        }
-
-        const unassignedRows =
-            matchingRows.filter(
-                row =>
-                    !assignments[row.key] ||
-                    !categories.some(
-                        category =>
-                            category.id ===
-                            assignments[row.key]
-                    )
-            );
-
-        if (
-            unassignedRows.length > 0
-        ) {
-            const category = {
-                id: '__unassigned_dispatch__',
-                name: 'Nicht zugeordnet',
-                collapsed: true
-            };
-
-            const section =
-                createCategoryElement(
-                    category,
-                    unassignedRows.length,
-                    () => {
-                        category.collapsed =
-                            !category.collapsed;
-
-                        scheduleScan(0);
-                    },
-                    {
-                        populateBody:
-                            body => {
-                                for (
-                                    const row of
-                                    unassignedRows
-                                ) {
-                                    body.appendChild(
-                                        createDispatchAAORow(
-                                            row
-                                        )
-                                    );
-                                }
-                            }
-                    }
-                );
-
-            panel.appendChild(
-                section
-            );
-        }
-
-        if (
-            panel.children.length === 0
-        ) {
-            const empty =
-                document.createElement('div');
-
-            empty.className =
-                'afilias-aao-empty';
-
-            empty.textContent =
-                searchTerm
-                    ? 'Keine AAOs entsprechen der Suche.'
-                    : 'Keine AAOs gefunden.';
-
-            panel.appendChild(
-                empty
-            );
-        }
-
-        list.style.display =
-            'none';
-    }
-
-    // =========================================================
-    // Selection Detection
-    // =========================================================
-
-    function isOriginalAAOSelected(row) {
-        if (!row?.row) {
-            return false;
-        }
-
-        const element =
-            row.row;
-
-        const className =
-            typeof element.className === 'string'
-                ? element.className
-                : '';
-
-        const ariaPressed =
-            element.getAttribute(
-                'aria-pressed'
-            );
-
-        const dataState =
-            element.getAttribute(
-                'data-state'
-            );
-
-        if (
-            ariaPressed === 'true' ||
-            dataState === 'selected' ||
-            dataState === 'active'
-        ) {
-            return true;
-        }
-
-        if (
-            className.includes('border-red') ||
-            className.includes('bg-red') ||
-            className.includes('text-red') ||
-            className.includes('ring-red')
-        ) {
-            return true;
-        }
-
-        return false;
-    }
-
-    function synchronizeSelectionFromGame(rows) {
-        if (
-            selectionChangeInProgress
-        ) {
-            return;
-        }
-
-
-        for (const row of rows) {
-            if (
-                isOriginalAAOSelected(row)
-            ) {
-                selectedAAOs.add(
-                    row.key
-                );
-            } else if (
-                selectedAAOs.has(row.key)
-            ) {
-
-            }
-        }
-    }
-
-    function clearSelectionsIfGameHasReset(rows) {
-        if (
-            selectionChangeInProgress
-        ) {
-            return;
-        }
-
-        if (!rows.length) {
-            return;
-        }
-
-        const anySelected =
-            rows.some(
-                isOriginalAAOSelected
-            );
-
-
-        if (!anySelected) {
-            selectedAAOs.clear();
-        }
-    }
-
-    // =========================================================
-    // Dispatch AAO Row
-    // =========================================================
-
-    function createDispatchAAORow(row) {
-        const button =
-            document.createElement('button');
-
-        button.type = 'button';
-
-        button.className =
-            'afilias-aao-item afilias-aao-dispatch-item';
-
-
-        if (
-            selectedAAOs.has(row.key)
-        ) {
-            button.classList.add(
-                'is-selected'
-            );
-        }
-
-        const icon =
-            document.createElement('div');
-
-        icon.className =
-            'afilias-aao-item-icon';
-
-        icon.innerHTML =
-            '<i class="fa-solid fa-shuffle"></i>';
-
-        const text =
-            document.createElement('div');
-
-        text.className =
-            'afilias-aao-item-text';
-
-        const name =
-            document.createElement('div');
-
-        name.className =
-            'afilias-aao-item-name';
-
-        name.textContent =
-            row.name;
-
-        const summary =
-            document.createElement('div');
-
-        summary.className =
-            'afilias-aao-item-summary';
-
-        summary.textContent =
-            row.summary;
-
-        text.appendChild(name);
-
-        if (row.summary) {
-            text.appendChild(summary);
-        }
-
-        button.appendChild(icon);
-        button.appendChild(text);
-
-        button.addEventListener(
-            'click',
-            event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                /*
-                 * Toggle our visual state immediately.
-                 */
-                const wasSelected =
-                    selectedAAOs.has(
-                        row.key
-                    );
-
-                if (wasSelected) {
-                    selectedAAOs.delete(
-                        row.key
-                    );
-                } else {
-                    selectedAAOs.add(
-                        row.key
-                    );
-                }
-
-                button.classList.toggle(
-                    'is-selected',
-                    !wasSelected
-                );
-
-
-                selectionChangeInProgress =
-                    true;
-
-                pauseObserver(150);
-
-                try {
-                    row.row.click();
-                } catch (error) {
-                    console.error(
-                        '[Afilia AAO Categories] Failed to click original AAO:',
-                        error
-                    );
-                }
-
-
-                setTimeout(
-                    () => {
-                        selectionChangeInProgress =
-                            false;
-
-                        scheduleScan(50);
-                    },
-                    100
-                );
-            }
-        );
-
-        return button;
-    }
-
-    // =========================================================
-    // Search
-    // =========================================================
-
-    function wireDispatchSearch(
-        sheet
-    ) {
-        const searchInput =
-            findDispatchSearchInput(
-                sheet
-            );
-
-        if (
-            !searchInput ||
-            searchInput.dataset
-                .afiliasAAOWired === '1'
-        ) {
-            return;
-        }
-
-        searchInput.dataset
-            .afiliasAAOWired = '1';
-
-        searchInput.addEventListener(
-            'input',
-            () => {
-                scheduleScan(0);
-            }
-        );
-    }
-
-    // =========================================================
-    // Main Scan
-    // =========================================================
-
-    async function scan() {
-        if (scanRunning) {
-            return;
-        }
-
-        scanRunning = true;
-
-        try {
-            injectStyles();
-
-            const [
-                categories,
-                assignments
-            ] = await Promise.all([
-                loadCategories(),
-                loadAssignments()
-            ]);
-
-            // -------------------------------------------------
-            // Game Settings
-            // -------------------------------------------------
-
-            const settingsContainer =
-                findSettingsAAOContainer();
-
-            if (
-                settingsContainer
-            ) {
-                const rows =
-                    findSettingsRows(
-                        settingsContainer
-                    );
-
-                if (
-                    rows.length > 0
-                ) {
-                    buildSettingsPanel(
-                        settingsContainer,
-                        rows,
-                        categories,
-                        assignments
-                    );
+                    updateAllDispatchItems();
                 }
             }
-
-            // -------------------------------------------------
-            // Dispatch
-            // -------------------------------------------------
-
-            const sheet =
-                findDispatchSheet();
-
-            if (sheet) {
-                const list =
-                    findDispatchList(
-                        sheet
-                    );
-
-                if (list) {
-                    const rows =
-                        getDispatchRows(
-                            list
-                        );
-
-                    if (
-                        rows.length > 0
-                    ) {
-                        buildDispatchPanel(
-                            sheet,
-                            list,
-                            rows,
-                            categories,
-                            assignments
-                        );
-                    }
-
-                    wireDispatchSearch(
-                        sheet
-                    );
-                }
-            }
-        } catch (error) {
-            console.error(
-                '[Afilia AAO Categories] scan failed:',
-                error
-            );
-        } finally {
-            scanRunning = false;
+        } else {
+            lastDispatchContainer = null;
         }
     }
 
-    // =========================================================
-    // Scheduler
-    // =========================================================
+    function scheduleScan() {
+        if (scanTimer) {
+            clearTimeout(scanTimer);
+        }
 
-    function scheduleScan(
-        delay = 80
-    ) {
-        clearTimeout(
-            scanTimer
-        );
+        scanTimer = setTimeout(() => {
+            scanTimer = null;
 
-        scanTimer =
-            setTimeout(
-                () => {
-                    scanTimer = null;
-                    scan();
-                },
-                delay
-            );
+            try {
+                scan();
+            } catch (error) {
+                console.error(
+                    '[Afilia AAO Categories] Scan failed:',
+                    error
+                );
+            }
+        }, 100);
     }
 
-    // =========================================================
-    // Mutation Observer
-    // =========================================================
+    /* =========================================================
+       MutationObserver
+       ========================================================= */
 
     function startObserver() {
         if (observer) {
-            return;
+            observer.disconnect();
         }
 
-        observer =
-            new MutationObserver(
-                mutations => {
-                    if (
-                        Date.now() <
-                        observerPauseUntil
-                    ) {
-                        return;
-                    }
+        observer = new MutationObserver(mutations => {
+            let relevant = false;
 
-                    let relevant =
-                        false;
-
-                    for (
-                        const mutation of
-                        mutations
-                    ) {
-                        if (
-                            mutation.type ===
-                            'childList'
-                        ) {
-                            relevant =
-                                true;
-                            break;
-                        }
-
-                        if (
-                            mutation.type ===
-                                'attributes' &&
-                            [
-                                'style',
-                                'class',
-                                'data-state',
-                                'value'
-                            ].includes(
-                                mutation.attributeName
-                            )
-                        ) {
-                            relevant =
-                                true;
-                            break;
-                        }
-                    }
-
-                    if (
-                        relevant
-                    ) {
-                        scheduleScan(
-                            100
-                        );
-                    }
+            for (const mutation of mutations) {
+                if (
+                    mutation.type === 'childList' ||
+                    mutation.type === 'attributes'
+                ) {
+                    relevant = true;
+                    break;
                 }
-            );
-
-        observer.observe(
-            document.body,
-            {
-                subtree: true,
-                childList: true,
-                attributes: true,
-                attributeFilter: [
-                    'style',
-                    'class',
-                    'data-state',
-                    'value'
-                ]
             }
-        );
+
+            if (relevant) {
+                scheduleScan();
+            }
+        });
+
+        observer.observe(document.body, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: [
+                'class',
+                'style',
+                'data-state'
+            ]
+        });
     }
 
-    // =========================================================
-    // Initialization
-    // =========================================================
+    /* =========================================================
+       Initialization
+       ========================================================= */
 
-    async function init() {
+    async function initialize() {
         try {
-            await loadCategories();
-            await loadAssignments();
+            db = await openDatabase();
+
+            await loadData();
 
             injectStyles();
+
+            discoverAAOs();
+
+            scan();
+
             startObserver();
 
-            scheduleScan(0);
-
-            log(
-                'initialized'
+            console.info(
+                '[Afilia AAO Categories] initialized.'
             );
         } catch (error) {
             console.error(
@@ -2150,5 +1822,5 @@
         }
     }
 
-    init();
+    initialize();
 })();
