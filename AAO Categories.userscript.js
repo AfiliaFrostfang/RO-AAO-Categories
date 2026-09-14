@@ -49,19 +49,8 @@
     let observer = null;
     let observerPauseUntil = 0;
 
-    /*
-     * AAOs currently selected in the dispatch window.
-     *
-     * This is intentionally kept outside the DOM because
-     * Rescue Operator can destroy/recreate AAO elements when
-     * their selection state changes.
-     */
     const selectedAAOs = new Set();
 
-    /*
-     * Prevents us from accidentally clearing our selection
-     * while the game is still processing a click.
-     */
     let selectionChangeInProgress = false;
 
     // =========================================================
@@ -1706,12 +1695,6 @@
         const element =
             row.row;
 
-        /*
-         * React/Tailwind selection indicators.
-         *
-         * We intentionally check several possibilities
-         * because the exact selected class may change.
-         */
         const className =
             typeof element.className === 'string'
                 ? element.className
@@ -1754,14 +1737,7 @@
             return;
         }
 
-        /*
-         * Only synchronize AAOs which currently exist in
-         * the original game's DOM.
-         *
-         * If the game temporarily removes an AAO during
-         * its React update, we retain our locally tracked
-         * selection instead of clearing it.
-         */
+
         for (const row of rows) {
             if (
                 isOriginalAAOSelected(row)
@@ -1772,12 +1748,7 @@
             } else if (
                 selectedAAOs.has(row.key)
             ) {
-                /*
-                 * Don't immediately remove it here.
-                 *
-                 * The game may have recreated the row before
-                 * applying the selected class.
-                 */
+
             }
         }
     }
@@ -1798,10 +1769,7 @@
                 isOriginalAAOSelected
             );
 
-        /*
-         * If the game explicitly shows no selected AAOs,
-         * its selection has likely been cleared.
-         */
+
         if (!anySelected) {
             selectedAAOs.clear();
         }
@@ -1820,9 +1788,7 @@
         button.className =
             'afilias-aao-item afilias-aao-dispatch-item';
 
-        /*
-         * Restore our locally tracked selected state.
-         */
+
         if (
             selectedAAOs.has(row.key)
         ) {
@@ -1902,10 +1868,7 @@
                     !wasSelected
                 );
 
-                /*
-                 * Tell the game to perform its normal AAO
-                 * action.
-                 */
+
                 selectionChangeInProgress =
                     true;
 
@@ -1920,9 +1883,7 @@
                     );
                 }
 
-                /*
-                 * Allow React to finish updating.
-                 */
+
                 setTimeout(
                     () => {
                         selectionChangeInProgress =
