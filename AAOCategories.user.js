@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Afilia AAO Categories
 // @namespace    https://afiliafrostfang.de/
-// @version      1.4.2
+// @version      1.5.0
 // @description  Categorizes Rescue Operator AAOs and adds categorized AAO selection to the vehicle dispatch window.
 // @author       AfiliaFrostfang
 // @match        https://game.rescue-operator.com/*
@@ -20,8 +20,15 @@
     const DB_VERSION = 1;
     const STORE_NAME = 'settings';
 
+    const SCRIPT_VERSION = '1.5.0';
+    const UPDATE_MANIFEST_URL =
+        'https://afiliafrostfang.github.io/RO-AAO-Categories/version.json';
+    const PROJECT_URL =
+        'https://github.com/AfiliaFrostfang/RO-AAO-Categories';
+
     const SETTINGS_PANEL_ID = 'afilia-aao-category-panel';
     const DISPATCH_PANEL_ID = 'afilia-aao-dispatch-panel';
+    const UPDATE_NOTICE_ID = 'afilia-aao-update-notice';
 
     const DEFAULT_CATEGORIES = [
         {
@@ -159,10 +166,168 @@
             .slice(2, 8)}`;
     }
 
+    function compareVersions(left, right) {
+        const leftParts = String(left)
+            .split('.')
+            .map(part => Number.parseInt(part, 10) || 0);
+
+        const rightParts = String(right)
+            .split('.')
+            .map(part => Number.parseInt(part, 10) || 0);
+
+        const length = Math.max(
+            leftParts.length,
+            rightParts.length
+        );
+
+        for (let index = 0; index < length; index += 1) {
+            const difference =
+                (leftParts[index] || 0) -
+                (rightParts[index] || 0);
+
+            if (difference !== 0) {
+                return difference;
+            }
+        }
+
+        return 0;
+    }
+
+    function isHTTPURL(value) {
+        try {
+            const url = new URL(value);
+
+            return url.protocol === 'http:' ||
+                url.protocol === 'https:';
+        } catch {
+            return false;
+        }
+    }
+
+    function showUpdateNotice(manifest) {
+        if (
+            document.getElementById(
+                UPDATE_NOTICE_ID
+            )
+        ) {
+            return;
+        }
+
+        const version =
+            String(manifest.version).trim();
+
+        const releaseURL =
+            isHTTPURL(manifest.url)
+                ? manifest.url
+                : PROJECT_URL;
+
+        const notice =
+            document.createElement('div');
+
+        notice.id = UPDATE_NOTICE_ID;
+        notice.className = 'afilia-update-notice';
+
+        notice.innerHTML = `
+            <div class="afilia-update-notice-content">
+                <strong>Update verfügbar</strong>
+                <span>
+                    AAO Categories ${escapeHTML(version)} ist verfügbar.
+                </span>
+            </div>
+
+            <a
+                class="afilia-update-notice-link"
+                href="${escapeHTML(releaseURL)}"
+                target="_blank"
+                rel="noopener noreferrer"
+            >
+                Update öffnen
+            </a>
+
+            <button
+                type="button"
+                class="afilia-update-notice-close"
+                title="Update-Hinweis schließen"
+            >
+                ×
+            </button>
+        `;
+
+        notice.querySelector(
+            '.afilia-update-notice-close'
+        ).addEventListener(
+            'click',
+            () => notice.remove()
+        );
+
+        document.body.appendChild(notice);
+    }
+
+    async function checkForUpdates() {
+        try {
+            const response = await fetch(
+                UPDATE_MANIFEST_URL,
+                {
+                    cache: 'no-store'
+                }
+            );
+
+            if (!response.ok) {
+                return;
+            }
+
+            const manifest = await response.json();
+
+            if (
+                !manifest ||
+                typeof manifest.version !== 'string' ||
+                compareVersions(
+                    manifest.version,
+                    SCRIPT_VERSION
+                ) <= 0
+            ) {
+                return;
+            }
+
+            showUpdateNotice(manifest);
+        } catch (error) {
+            console.debug(
+                '[Afilia AAO Categories] Update check skipped:',
+                error
+            );
+        }
+    }
+
     function findCategory(categoryID) {
         return categories.find(
             category => category.id === categoryID
         );
+    }
+
+    async function moveCategory(categoryID, direction) {
+        const index = categories.findIndex(
+            category => category.id === categoryID
+        );
+
+        const targetIndex = index + direction;
+
+        if (
+            index < 0 ||
+            targetIndex < 0 ||
+            targetIndex >= categories.length
+        ) {
+            return;
+        }
+
+        const category = categories[index];
+
+        categories[index] = categories[targetIndex];
+        categories[targetIndex] = category;
+
+        await saveCategories();
+
+        renderSettingsPanel();
+        renderDispatchPanel();
     }
 
     function getCategoryForAAO(key) {
@@ -1255,7 +1420,7 @@
            Categories
            ----------------------------------------------------- */
 
-        for (const category of categories) {
+        for (const [index, category] of categories.entries()) {
             const section =
                 document.createElement('div');
 
@@ -1283,6 +1448,24 @@
                 <span class="afilia-category-actions">
                     <button
                         type="button"
+                        class="afilia-category-move-up"
+                        title="Kategorie nach oben verschieben"
+                        ${index === 0 ? 'disabled' : ''}
+                    >
+                        ↑
+                    </button>
+
+                    <button
+                        type="button"
+                        class="afilia-category-move-down"
+                        title="Kategorie nach unten verschieben"
+                        ${index === categories.length - 1 ? 'disabled' : ''}
+                    >
+                        ↓
+                    </button>
+
+                    <button
+                        type="button"
                         class="afilia-category-rename"
                         title="Kategorie umbenennen"
                     >
@@ -1301,6 +1484,36 @@
 
             section.appendChild(
                 categoryHeader
+            );
+
+            categoryHeader.querySelector(
+                '.afilia-category-move-up'
+            ).addEventListener(
+                'click',
+                async event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    await moveCategory(
+                        category.id,
+                        -1
+                    );
+                }
+            );
+
+            categoryHeader.querySelector(
+                '.afilia-category-move-down'
+            ).addEventListener(
+                'click',
+                async event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    await moveCategory(
+                        category.id,
+                        1
+                    );
+                }
             );
 
             const content =
@@ -1775,6 +1988,62 @@
             'afilia-aao-category-styles';
 
         style.textContent = `
+            .afilia-update-notice {
+                position: fixed;
+                top: 16px;
+                right: 16px;
+                z-index: 99999;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                max-width: min(560px, calc(100vw - 32px));
+                padding: 12px 14px;
+                border: 1px solid #fecaca;
+                border-radius: 10px;
+                background: #fff7f7;
+                box-shadow: 0 8px 24px rgba(17, 24, 39, 0.16);
+                color: #7f1d1d;
+                font-size: 13px;
+            }
+
+            .afilia-update-notice-content {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                min-width: 0;
+            }
+
+            .afilia-update-notice-link {
+                flex-shrink: 0;
+                padding: 7px 10px;
+                border-radius: 7px;
+                background: #dc2626;
+                color: white;
+                font-weight: 600;
+                text-decoration: none;
+            }
+
+            .afilia-update-notice-link:hover {
+                background: #b91c1c;
+            }
+
+            .afilia-update-notice-close {
+                flex-shrink: 0;
+                width: 28px;
+                height: 28px;
+                border: 0;
+                border-radius: 6px;
+                background: transparent;
+                color: #991b1b;
+                cursor: pointer;
+                font-size: 20px;
+                line-height: 1;
+            }
+
+            .afilia-update-notice-close:hover {
+                background: #fee2e2;
+            }
+
             /* =====================================================
                Settings
                ===================================================== */
@@ -1875,6 +2144,16 @@
             .afilia-category-actions button:hover {
                 background: #e5e7eb;
                 color: #111827;
+            }
+
+            .afilia-category-actions button:disabled {
+                opacity: 0.35;
+                cursor: default;
+            }
+
+            .afilia-category-actions button:disabled:hover {
+                background: transparent;
+                color: #6b7280;
             }
 
             .afilia-category-delete:hover {
@@ -2258,6 +2537,8 @@
             scan();
 
             startObserver();
+
+            checkForUpdates();
 
             console.info(
                 '[Afilia AAO Categories] initialized.'
