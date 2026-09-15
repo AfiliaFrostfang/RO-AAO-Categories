@@ -305,6 +305,8 @@
             findSettingsAAOContainer();
 
         if (settingsContainer) {
+            const seenSettingsKeys = new Set();
+
             const rows = Array.from(
                 settingsContainer.querySelectorAll(
                     ':scope > [data-slot="sortable-item"]'
@@ -327,6 +329,7 @@
                 }
 
                 const key = getAAOKey(name);
+                seenSettingsKeys.add(key);
 
                 const summaryElement = row.querySelector(
                     'span.font-mono'
@@ -353,6 +356,26 @@
                     existing.name !== name ||
                     existing.summary !== summary
                 ) {
+                    changed = true;
+                }
+            }
+
+            for (const [key, aao] of aaoCatalog) {
+                if (
+                    aao.source === 'settings' &&
+                    !seenSettingsKeys.has(key)
+                ) {
+                    aaoCatalog.delete(key);
+                    originalAAORows.delete(key);
+                    selectedAAOs.delete(key);
+
+                    if (assignments[key]) {
+                        delete assignments[key];
+
+                        saveAssignments()
+                            .catch(console.error);
+                    }
+
                     changed = true;
                 }
             }
@@ -1666,6 +1689,14 @@
             >
                 ✎
             </button>
+
+            <button
+                type="button"
+                class="afilia-settings-delete"
+                title="AAO löschen"
+            >
+                ×
+            </button>
         `;
 
         const select =
@@ -1746,6 +1777,58 @@
 
                 if (editButton) {
                     editButton.click();
+                }
+            }
+        );
+
+        row.querySelector(
+            '.afilia-settings-delete'
+        ).addEventListener(
+            'click',
+            event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const original =
+                    originalAAORows.get(
+                        aao.key
+                    );
+
+                if (!original) {
+                    return;
+                }
+
+                const deleteButton =
+                    Array.from(
+                        original.querySelectorAll(
+                            'button'
+                        )
+                    ).find(button => {
+                        const svg =
+                            button.querySelector(
+                                'svg'
+                            );
+
+                        const svgClass =
+                            svg?.getAttribute(
+                                'class'
+                            ) || '';
+
+                        return (
+                            svgClass.includes('trash') ||
+                            /löschen|loeschen|delete/i.test(
+                                button.textContent || ''
+                            ) ||
+                            /löschen|loeschen|delete/i.test(
+                                button.getAttribute(
+                                    'title'
+                                ) || ''
+                            )
+                        );
+                    });
+
+                if (deleteButton) {
+                    deleteButton.click();
                 }
             }
         );
@@ -1981,6 +2064,21 @@
                 background: #f3f4f6;
             }
 
+            .afilia-settings-delete {
+                width: 34px;
+                height: 34px;
+                flex-shrink: 0;
+                border: 1px solid #fecaca;
+                border-radius: 8px;
+                background: white;
+                color: #dc2626;
+                cursor: pointer;
+            }
+
+            .afilia-settings-delete:hover {
+                background: #fee2e2;
+            }
+
             /* =====================================================
                Dispatch
                ===================================================== */
@@ -2111,7 +2209,8 @@
        ========================================================= */
 
     function scan() {
-        discoverAAOs();
+        const catalogChanged =
+            discoverAAOs();
 
         /* -----------------------------------------------------
            Settings
@@ -2126,7 +2225,8 @@
                     lastSettingsContainer ||
                 !document.querySelector(
                     `#${SETTINGS_PANEL_ID}`
-                )
+                ) ||
+                catalogChanged
             ) {
                 lastSettingsContainer =
                     settingsContainer;
@@ -2160,7 +2260,8 @@
                         lastDispatchContainer ||
                     !document.querySelector(
                         `#${DISPATCH_PANEL_ID}`
-                    )
+                    ) ||
+                    catalogChanged
                 ) {
                     lastDispatchContainer =
                         dispatchDialog;
