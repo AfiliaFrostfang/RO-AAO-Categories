@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Afilia AAO Categories
 // @namespace    https://afiliafrostfang.de/
-// @version      1.4.1
+// @version      1.4.2
 // @description  Categorizes Rescue Operator AAOs and adds categorized AAO selection to the vehicle dispatch window.
 // @author       AfiliaFrostfang
 // @match        https://game.rescue-operator.com/*
@@ -238,7 +238,7 @@
 
         return dialogs.find(dialog => {
             const search = dialog.querySelector(
-                'input[placeholder="AAO suchen..."]'
+                'input[placeholder="AAO suchen..."], input[placeholder="Suchen..."]'
             );
 
             if (!search) {
@@ -260,7 +260,7 @@
         }
 
         const searchInput = dialog.querySelector(
-            'input[placeholder="AAO suchen..."]'
+            'input[placeholder="AAO suchen..."], input[placeholder="Suchen..."]'
         );
 
         if (!searchInput) {
@@ -282,15 +282,75 @@
         return null;
     }
 
+    function isDispatchAAOModeEnabled(dialog) {
+        if (!dialog) {
+            return false;
+        }
+
+        if (dialog.querySelector('[data-drag-vehicle-id]')) {
+            return false;
+        }
+
+        const modeControl = Array.from(
+            dialog.querySelectorAll(
+                'button, [role="button"], [role="switch"], input[type="checkbox"]'
+            )
+        ).find(control => {
+            const label = (
+                control.getAttribute('aria-label') ||
+                control.getAttribute('title') ||
+                control.textContent
+            )
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            return label === 'aao modus' ||
+                label === 'aao mode' ||
+                label.includes('aao-modus');
+        });
+
+        if (!modeControl) {
+            return true;
+        }
+
+        const state = modeControl.getAttribute('data-state');
+        const pressed = modeControl.getAttribute('aria-pressed');
+        const checked = modeControl.getAttribute('aria-checked');
+
+        return state !== 'off' &&
+            state !== 'unchecked' &&
+            pressed !== 'false' &&
+            checked !== 'false' &&
+            (!('checked' in modeControl) || modeControl.checked);
+    }
+
+    function removeDispatchPanel(dialog, list) {
+        const panel = dialog && dialog.querySelector(
+            `#${DISPATCH_PANEL_ID}`
+        );
+
+        if (panel) {
+            panel.remove();
+        }
+
+        if (list) {
+            list.style.display = '';
+        }
+
+        selectedAAOs.clear();
+    }
+
     function getDispatchCards(container) {
         if (!container) {
             return [];
         }
 
         return Array.from(container.children).filter(child => {
-            return !!child.querySelector(
-                'div.font-semibold.text-sm.text-gray-900'
-            );
+            return child.matches('[data-slot="card"]') ||
+                !!child.querySelector(
+                    'div.font-semibold.text-sm.text-gray-900'
+                );
         });
     }
 
@@ -543,30 +603,6 @@
         }
     }
 
-    function updateDispatchAlarmButton(dialog) {
-        if (!dialog) {
-            return;
-        }
-
-        const button = Array.from(
-            dialog.querySelectorAll('button')
-        ).find(button => {
-            return button.textContent.includes(
-                'Alarmieren'
-            );
-        });
-
-        if (!button) {
-            return;
-        }
-
-        const count = selectedAAOs.size;
-
-        if (count === 0) {
-            return;
-        }
-    }
-
     /* =========================================================
        Trigger native AAO
        ========================================================= */
@@ -697,19 +733,6 @@
         updateAllDispatchItems();
 
         triggerOriginalAAO(key);
-
-        setTimeout(() => {
-            updateAllDispatchItems();
-
-            const dialog =
-                findDispatchDialog();
-
-            if (dialog) {
-                updateDispatchAlarmButton(
-                    dialog
-                );
-            }
-        }, 0);
 
         setTimeout(() => {
             updateAllDispatchItems();
@@ -862,145 +885,6 @@
         );
 
         return element;
-    }
-
-    function createDispatchCategoryElement(
-        category
-    ) {
-        const wrapper =
-            document.createElement('div');
-
-        wrapper.className =
-            'afilia-dispatch-category';
-
-        wrapper.dataset.categoryID =
-            category.id;
-
-        const header =
-            document.createElement('button');
-
-        header.type = 'button';
-
-        header.className =
-            'afilia-dispatch-category-header';
-
-        const items =
-            getAAOsForCategory(
-                category.id
-            );
-
-        header.innerHTML = `
-            <span class="afilia-dispatch-category-arrow">
-                ${category.collapsed ? '▶' : '▼'}
-            </span>
-
-            <span class="afilia-dispatch-category-name">
-                ${escapeHTML(category.name)}
-            </span>
-
-            <span class="afilia-dispatch-category-count">
-                ${items.length}
-            </span>
-        `;
-
-        const content =
-            document.createElement('div');
-
-        content.className =
-            'afilia-dispatch-category-content';
-
-        if (category.collapsed) {
-            content.style.display = 'none';
-        }
-
-        for (const aao of items) {
-            content.appendChild(
-                createDispatchAAOElement(
-                    aao
-                )
-            );
-        }
-
-        header.addEventListener(
-            'click',
-            event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                category.collapsed =
-                    !category.collapsed;
-
-                saveCategories()
-                    .catch(console.error);
-
-                renderDispatchPanel();
-            }
-        );
-
-        wrapper.appendChild(header);
-        wrapper.appendChild(content);
-
-        return wrapper;
-    }
-
-    function createUncategorizedElement() {
-        const items =
-            getUncategorizedAAOs();
-
-        if (items.length === 0) {
-            return null;
-        }
-
-        const category = {
-            id: '__uncategorized__',
-            name: 'Nicht zugeordnet',
-            collapsed: false
-        };
-
-        const wrapper =
-            document.createElement('div');
-
-        wrapper.className =
-            'afilia-dispatch-category';
-
-        const header =
-            document.createElement('div');
-
-        header.className =
-            'afilia-dispatch-category-header afilia-dispatch-uncategorized';
-
-        header.innerHTML = `
-            <span class="afilia-dispatch-category-arrow">
-                ▼
-            </span>
-
-            <span class="afilia-dispatch-category-name">
-                ${escapeHTML(category.name)}
-            </span>
-
-            <span class="afilia-dispatch-category-count">
-                ${items.length}
-            </span>
-        `;
-
-        const content =
-            document.createElement('div');
-
-        content.className =
-            'afilia-dispatch-category-content';
-
-        for (const aao of items) {
-            content.appendChild(
-                createDispatchAAOElement(
-                    aao
-                )
-            );
-        }
-
-        wrapper.appendChild(header);
-        wrapper.appendChild(content);
-
-        return wrapper;
     }
 
     function renderDispatchPanel() {
@@ -1843,7 +1727,7 @@
     function hookDispatchSearch(dialog) {
         const input =
             dialog?.querySelector(
-                'input[placeholder="AAO suchen..."]'
+                'input[placeholder="AAO suchen..."], input[placeholder="Suchen..."]'
             );
 
         if (!input) {
@@ -2255,7 +2139,15 @@
                 );
 
             if (list) {
-                if (
+                if (!isDispatchAAOModeEnabled(dispatchDialog)) {
+                    removeDispatchPanel(
+                        dispatchDialog,
+                        list
+                    );
+
+                    lastDispatchContainer =
+                        dispatchDialog;
+                } else if (
                     dispatchDialog !==
                         lastDispatchContainer ||
                     !document.querySelector(
