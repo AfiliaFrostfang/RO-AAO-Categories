@@ -2272,6 +2272,10 @@
                 }
             }
         } else {
+            if (lastDispatchContainer) {
+                selectedAAOs.clear();
+            }
+
             lastDispatchContainer = null;
         }
     }
