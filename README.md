@@ -21,3 +21,10 @@ TLDR: Es erweitert nur die lokale AAO-Verwaltung und Fahrzeug-Alarmierung.
 
 Dieses Tool benutzt keine Automatisierungswerkzeuge oder andere durch die AGB und Regeln verbotene Funktionen, es erweitert nur die AAO Funktionen durch Kategorieren im Einstellungs und Dispatch Fenster.
 Der Quellcode wird hier immer sichtbar und einsehbar sein und kann jederzeit durch die Administration geprüft und genehmigt oder abgelehnt werden.
+
+# Geplante Features
+
+- Erweiterung der Funktionen zu einer Toolbox
+- Notizblock Feature
+- UI Overhaul für diverse Fenster z.b Krankenhausübersicht
+- 'Applet Store' um Toolbox und dessen Funktionen zu personalisieren.
