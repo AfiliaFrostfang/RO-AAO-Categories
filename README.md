@@ -12,11 +12,6 @@ Es:
 - prüft beim Start die `version.json` auf GitHub Pages und weist auf Updates hin,
 - synchronisiert die Anzeige automatisch mit Änderungen im Spiel.
 
-Für eine neue Version müssen `@version` und `SCRIPT_VERSION` in `AAOCategories.user.js`
-sowie `version` in `version.json` aktualisiert werden. Die Datei `version.json` muss
-über GitHub Pages unter `https://afiliafrostfang.github.io/RO-AAO-Categories/version.json`
-erreichbar sein.
-
 TLDR: Es erweitert nur die lokale AAO-Verwaltung und Fahrzeug-Alarmierung.
 
 Dieses Tool benutzt keine Automatisierungswerkzeuge oder andere durch die AGB und Regeln verbotene Funktionen, es erweitert nur die AAO Funktionen durch Kategorieren im Einstellungs und Dispatch Fenster.
