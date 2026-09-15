@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Afilia AAO Categories
 // @namespace    https://afiliafrostfang.de/
-// @version      1.4.0
+// @version      1.4.1
 // @description  Categorizes Rescue Operator AAOs and adds categorized AAO selection to the vehicle dispatch window.
 // @author       AfiliaFrostfang
 // @match        https://game.rescue-operator.com/*
@@ -50,12 +50,8 @@
     let categories = [];
     let assignments = {};
 
-
     const aaoCatalog = new Map();
-
-
     const selectedAAOs = new Set();
-
     const originalAAORows = new Map();
 
     let observer = null;
@@ -94,24 +90,42 @@
 
     function dbGet(key) {
         return new Promise((resolve, reject) => {
-            const transaction = db.transaction(STORE_NAME, 'readonly');
+            const transaction = db.transaction(
+                STORE_NAME,
+                'readonly'
+            );
+
             const store = transaction.objectStore(STORE_NAME);
             const request = store.get(key);
 
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                resolve(request.result);
+            };
+
+            request.onerror = () => {
+                reject(request.error);
+            };
         });
     }
 
     function dbSet(key, value) {
         return new Promise((resolve, reject) => {
-            const transaction = db.transaction(STORE_NAME, 'readwrite');
+            const transaction = db.transaction(
+                STORE_NAME,
+                'readwrite'
+            );
+
             const store = transaction.objectStore(STORE_NAME);
 
             store.put(value, key);
 
-            transaction.oncomplete = () => resolve();
-            transaction.onerror = () => reject(transaction.error);
+            transaction.oncomplete = () => {
+                resolve();
+            };
+
+            transaction.onerror = () => {
+                reject(transaction.error);
+            };
         });
     }
 
@@ -146,7 +160,9 @@
     }
 
     function findCategory(categoryID) {
-        return categories.find(category => category.id === categoryID);
+        return categories.find(
+            category => category.id === categoryID
+        );
     }
 
     function getCategoryForAAO(key) {
@@ -167,7 +183,10 @@
         categories = await dbGet('categories');
 
         if (!Array.isArray(categories) || categories.length === 0) {
-            categories = structuredClone(DEFAULT_CATEGORIES);
+            categories = DEFAULT_CATEGORIES.map(category => ({
+                ...category
+            }));
+
             await dbSet('categories', categories);
         }
 
@@ -188,7 +207,9 @@
 
     function getAAOContainers() {
         return Array.from(
-            document.querySelectorAll('[data-slot="sortable-content"]')
+            document.querySelectorAll(
+                '[data-slot="sortable-content"]'
+            )
         );
     }
 
@@ -203,23 +224,16 @@
     }
 
     function findSettingsAAOContainer() {
-        return getAAOContainers().find(isSettingsAAOContainer) || null;
+        return getAAOContainers().find(
+            isSettingsAAOContainer
+        ) || null;
     }
 
-    /*
-     * Dispatch AAO container:
-     *
-     * The dispatch window does NOT use sortable-item.
-     * Its AAO entries look like:
-     *
-     * div.flex.items-center.gap-3.p-3.rounded-xl.border.cursor-pointer
-     *
-     * We therefore identify it through the dispatch dialog and
-     * its "AAO suchen..." input.
-     */
     function findDispatchDialog() {
         const dialogs = Array.from(
-            document.querySelectorAll('[role="dialog"][data-slot="sheet-content"]')
+            document.querySelectorAll(
+                '[role="dialog"][data-slot="sheet-content"]'
+            )
         );
 
         return dialogs.find(dialog => {
@@ -231,8 +245,12 @@
                 return false;
             }
 
-            return Array.from(dialog.querySelectorAll('h2'))
-                .some(h2 => h2.textContent.trim() === 'Fahrzeuge alarmieren');
+            return Array.from(
+                dialog.querySelectorAll('h2')
+            ).some(h2 => {
+                return h2.textContent.trim() ===
+                    'Fahrzeuge alarmieren';
+            });
         }) || null;
     }
 
@@ -248,7 +266,6 @@
         if (!searchInput) {
             return null;
         }
-
 
         const candidates = Array.from(
             dialog.querySelectorAll('div.space-y-2')
@@ -277,12 +294,15 @@
         });
     }
 
-
     function discoverAAOs() {
         let changed = false;
 
+        /* -----------------------------------------------------
+           Settings AAOs
+           ----------------------------------------------------- */
 
-        const settingsContainer = findSettingsAAOContainer();
+        const settingsContainer =
+            findSettingsAAOContainer();
 
         if (settingsContainer) {
             const rows = Array.from(
@@ -338,25 +358,33 @@
             }
         }
 
+        /* -----------------------------------------------------
+           Dispatch AAOs
+           ----------------------------------------------------- */
 
-        const dispatchDialog = findDispatchDialog();
+        const dispatchDialog =
+            findDispatchDialog();
 
         if (dispatchDialog) {
-            const list = findDispatchList(dispatchDialog);
+            const list =
+                findDispatchList(dispatchDialog);
 
             if (list) {
-                const cards = getDispatchCards(list);
+                const cards =
+                    getDispatchCards(list);
 
                 for (const card of cards) {
-                    const nameElement = card.querySelector(
-                        'div.font-semibold.text-sm.text-gray-900'
-                    );
+                    const nameElement =
+                        card.querySelector(
+                            'div.font-semibold.text-sm.text-gray-900'
+                        );
 
                     if (!nameElement) {
                         continue;
                     }
 
-                    const name = nameElement.textContent.trim();
+                    const name =
+                        nameElement.textContent.trim();
 
                     if (!name) {
                         continue;
@@ -364,15 +392,18 @@
 
                     const key = getAAOKey(name);
 
-                    const summaryElement = card.querySelector(
-                        'div.text-xs.text-gray-500.font-mono'
-                    );
+                    const summaryElement =
+                        card.querySelector(
+                            'div.text-xs.text-gray-500.font-mono'
+                        );
 
-                    const summary = summaryElement
-                        ? summaryElement.textContent.trim()
-                        : '';
+                    const summary =
+                        summaryElement
+                            ? summaryElement.textContent.trim()
+                            : '';
 
-                    const existing = aaoCatalog.get(key);
+                    const existing =
+                        aaoCatalog.get(key);
 
                     aaoCatalog.set(key, {
                         key,
@@ -411,42 +442,80 @@
             return;
         }
 
-        if (selected) {
-            element.classList.add('afilia-aao-selected');
+        const icon =
+            element.querySelector('.afilia-aao-icon');
 
-            element.style.borderColor = '#ef4444';
-            element.style.backgroundColor = '#fef2f2';
+        const iconElement =
+            element.querySelector('.afilia-aao-icon i');
+
+        const name =
+            element.querySelector('.afilia-aao-name');
+
+        if (selected) {
+            element.classList.add(
+                'afilia-aao-selected'
+            );
+
+            element.setAttribute(
+                'aria-pressed',
+                'true'
+            );
+
+            element.style.borderColor =
+                '#ef4444';
+
+            element.style.backgroundColor =
+                '#fef2f2';
+
             element.style.boxShadow =
                 '0 1px 2px rgba(239,68,68,0.12), 0 8px 20px -6px rgba(239,68,68,0.25)';
 
-            const icon = element.querySelector('.afilia-aao-icon');
-
             if (icon) {
-                icon.style.backgroundColor = '#fee2e2';
+                icon.style.backgroundColor =
+                    '#fee2e2';
             }
 
-            const iconElement = element.querySelector('.afilia-aao-icon i');
-
             if (iconElement) {
-                iconElement.style.color = '#ef4444';
+                iconElement.style.color =
+                    '#ef4444';
+            }
+
+            if (name) {
+                name.style.color =
+                    '#dc2626';
             }
         } else {
-            element.classList.remove('afilia-aao-selected');
+            element.classList.remove(
+                'afilia-aao-selected'
+            );
 
-            element.style.borderColor = '';
-            element.style.backgroundColor = '';
-            element.style.boxShadow = '';
+            element.setAttribute(
+                'aria-pressed',
+                'false'
+            );
 
-            const icon = element.querySelector('.afilia-aao-icon');
+            element.style.borderColor =
+                '#e5e7eb';
+
+            element.style.backgroundColor =
+                '#ffffff';
+
+            element.style.boxShadow =
+                '0 1px 2px rgba(16,24,40,0.04), 0 8px 20px -6px rgba(16,24,40,0.16)';
 
             if (icon) {
-                icon.style.backgroundColor = '';
+                icon.style.backgroundColor =
+                    '#eff6ff';
             }
 
-            const iconElement = element.querySelector('.afilia-aao-icon i');
-
             if (iconElement) {
-                iconElement.style.color = '';
+                iconElement.style.color =
+                    '#3b82f6';
+            }
+
+            if (name) {
+                name.style.color =
+                    '#111827';
             }
         }
     }
@@ -459,7 +528,9 @@
         const button = Array.from(
             dialog.querySelectorAll('button')
         ).find(button => {
-            return button.textContent.includes('Alarmieren');
+            return button.textContent.includes(
+                'Alarmieren'
+            );
         });
 
         if (!button) {
@@ -468,48 +539,71 @@
 
         const count = selectedAAOs.size;
 
-
         if (count === 0) {
             return;
         }
     }
 
+    /* =========================================================
+       Trigger native AAO
+       ========================================================= */
 
     function triggerOriginalAAO(key) {
-        let original = originalAAORows.get(key);
+        let original =
+            originalAAORows.get(key);
 
+        /* -----------------------------------------------------
+           Try current dispatch dialog first
+           ----------------------------------------------------- */
 
-        const dispatchDialog = findDispatchDialog();
+        const dispatchDialog =
+            findDispatchDialog();
 
         if (dispatchDialog) {
-            const list = findDispatchList(dispatchDialog);
+            const list =
+                findDispatchList(dispatchDialog);
 
             if (list) {
-                const cards = getDispatchCards(list);
+                const cards =
+                    getDispatchCards(list);
 
                 for (const card of cards) {
-                    const nameElement = card.querySelector(
-                        'div.font-semibold.text-sm.text-gray-900'
-                    );
+                    const nameElement =
+                        card.querySelector(
+                            'div.font-semibold.text-sm.text-gray-900'
+                        );
 
                     if (!nameElement) {
                         continue;
                     }
 
-                    const name = nameElement.textContent.trim();
+                    const name =
+                        nameElement.textContent.trim();
 
                     if (getAAOKey(name) === key) {
                         original = card;
-                        originalAAORows.set(key, card);
+
+                        originalAAORows.set(
+                            key,
+                            card
+                        );
+
                         break;
                     }
                 }
             }
         }
 
+        /* -----------------------------------------------------
+           Fall back to settings AAO
+           ----------------------------------------------------- */
 
-        if (!original || !original.isConnected) {
-            const settingsContainer = findSettingsAAOContainer();
+        if (
+            !original ||
+            !original.isConnected
+        ) {
+            const settingsContainer =
+                findSettingsAAOContainer();
 
             if (settingsContainer) {
                 const rows = Array.from(
@@ -519,27 +613,41 @@
                 );
 
                 for (const row of rows) {
-                    const nameElement = row.querySelector(
-                        'span.font-semibold'
-                    );
+                    const nameElement =
+                        row.querySelector(
+                            'span.font-semibold'
+                        );
 
                     if (!nameElement) {
                         continue;
                     }
 
                     if (
-                        getAAOKey(nameElement.textContent.trim()) === key
+                        getAAOKey(
+                            nameElement.textContent.trim()
+                        ) === key
                     ) {
                         original = row;
-                        originalAAORows.set(key, row);
+
+                        originalAAORows.set(
+                            key,
+                            row
+                        );
+
                         break;
                     }
                 }
             }
         }
 
-        if (original && typeof original.click === 'function') {
+        /* -----------------------------------------------------
+           Click native AAO
+           ----------------------------------------------------- */
 
+        if (
+            original &&
+            typeof original.click === 'function'
+        ) {
             original.click();
 
             return true;
@@ -554,8 +662,8 @@
     }
 
     function toggleAAOSelection(key) {
-        const currentlySelected = selectedAAOs.has(key);
-
+        const currentlySelected =
+            selectedAAOs.has(key);
 
         if (currentlySelected) {
             selectedAAOs.delete(key);
@@ -570,16 +678,27 @@
         setTimeout(() => {
             updateAllDispatchItems();
 
-            const dialog = findDispatchDialog();
+            const dialog =
+                findDispatchDialog();
 
             if (dialog) {
-                updateDispatchAlarmButton(dialog);
+                updateDispatchAlarmButton(
+                    dialog
+                );
             }
         }, 0);
 
         setTimeout(() => {
             updateAllDispatchItems();
         }, 50);
+
+        setTimeout(() => {
+            updateAllDispatchItems();
+        }, 150);
+
+        setTimeout(() => {
+            updateAllDispatchItems();
+        }, 300);
     }
 
     /* =========================================================
@@ -587,52 +706,76 @@
        ========================================================= */
 
     function getAAOsForCategory(categoryID) {
-        return Array.from(aaoCatalog.values())
+        return Array.from(
+            aaoCatalog.values()
+        )
             .filter(aao => {
-                return assignments[aao.key] === categoryID;
+                return assignments[aao.key] ===
+                    categoryID;
             })
             .sort((a, b) => {
                 return a.name.localeCompare(
                     b.name,
                     'de',
-                    { sensitivity: 'base' }
+                    {
+                        sensitivity: 'base'
+                    }
                 );
             });
     }
 
     function getUncategorizedAAOs() {
-        return Array.from(aaoCatalog.values())
-            .filter(aao => !getCategoryForAAO(aao.key))
+        return Array.from(
+            aaoCatalog.values()
+        )
+            .filter(aao => {
+                return !getCategoryForAAO(
+                    aao.key
+                );
+            })
             .sort((a, b) => {
                 return a.name.localeCompare(
                     b.name,
                     'de',
-                    { sensitivity: 'base' }
+                    {
+                        sensitivity: 'base'
+                    }
                 );
             });
     }
 
     function createDispatchAAOElement(aao) {
-        const selected = isAAOSelected(aao.key);
+        const selected =
+            isAAOSelected(aao.key);
 
-        const element = document.createElement('div');
+        const element =
+            document.createElement('div');
 
         element.className =
-            'flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all';
+            'afilia-aao-dispatch-item flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all';
 
-        element.dataset.afiliaAAOKey = aao.key;
+        element.setAttribute(
+            'data-afilia-aao-key',
+            aao.key
+        );
 
-        element.style.borderColor = selected
-            ? '#ef4444'
-            : '#e5e7eb';
+        element.setAttribute(
+            'role',
+            'button'
+        );
 
-        element.style.backgroundColor = selected
-            ? '#fef2f2'
-            : '#ffffff';
+        element.setAttribute(
+            'tabindex',
+            '0'
+        );
 
-        element.style.boxShadow = selected
-            ? '0 1px 2px rgba(239,68,68,0.12), 0 8px 20px -6px rgba(239,68,68,0.25)'
-            : '0 1px 2px rgba(16,24,40,0.04), 0 8px 20px -6px rgba(16,24,40,0.16)';
+        element.setAttribute(
+            'aria-pressed',
+            selected ? 'true' : 'false'
+        );
+
+        element.title =
+            `AAO auswählen: ${aao.name}`;
 
         element.innerHTML = `
             <div
@@ -647,40 +790,81 @@
 
             <div class="flex-1 min-w-0">
                 <div
-                    class="font-semibold text-sm"
+                    class="afilia-aao-name font-semibold text-sm"
                     style="color:${selected ? '#dc2626' : '#111827'}"
                 >
                     ${escapeHTML(aao.name)}
                 </div>
 
-                <div class="text-xs text-gray-500 font-mono truncate">
+                <div
+                    class="text-xs text-gray-500 font-mono truncate"
+                >
                     ${escapeHTML(aao.summary)}
                 </div>
             </div>
         `;
 
-        element.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
+        element.addEventListener(
+            'click',
+            event => {
+                event.preventDefault();
+                event.stopPropagation();
 
-            toggleAAOSelection(aao.key);
-        });
+                toggleAAOSelection(
+                    aao.key
+                );
+            }
+        );
+
+        element.addEventListener(
+            'keydown',
+            event => {
+                if (
+                    event.key === 'Enter' ||
+                    event.key === ' '
+                ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    toggleAAOSelection(
+                        aao.key
+                    );
+                }
+            }
+        );
+
+        setSelectedVisual(
+            element,
+            selected
+        );
 
         return element;
     }
 
-    function createDispatchCategoryElement(category) {
-        const wrapper = document.createElement('div');
+    function createDispatchCategoryElement(
+        category
+    ) {
+        const wrapper =
+            document.createElement('div');
 
-        wrapper.className = 'afilia-dispatch-category';
-        wrapper.dataset.categoryID = category.id;
+        wrapper.className =
+            'afilia-dispatch-category';
 
-        const header = document.createElement('button');
+        wrapper.dataset.categoryID =
+            category.id;
+
+        const header =
+            document.createElement('button');
 
         header.type = 'button';
-        header.className = 'afilia-dispatch-category-header';
 
-        const items = getAAOsForCategory(category.id);
+        header.className =
+            'afilia-dispatch-category-header';
+
+        const items =
+            getAAOsForCategory(
+                category.id
+            );
 
         header.innerHTML = `
             <span class="afilia-dispatch-category-arrow">
@@ -696,9 +880,11 @@
             </span>
         `;
 
-        const content = document.createElement('div');
+        const content =
+            document.createElement('div');
 
-        content.className = 'afilia-dispatch-category-content';
+        content.className =
+            'afilia-dispatch-category-content';
 
         if (category.collapsed) {
             content.style.display = 'none';
@@ -706,20 +892,27 @@
 
         for (const aao of items) {
             content.appendChild(
-                createDispatchAAOElement(aao)
+                createDispatchAAOElement(
+                    aao
+                )
             );
         }
 
-        header.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
+        header.addEventListener(
+            'click',
+            event => {
+                event.preventDefault();
+                event.stopPropagation();
 
-            category.collapsed = !category.collapsed;
+                category.collapsed =
+                    !category.collapsed;
 
-            saveCategories().catch(console.error);
+                saveCategories()
+                    .catch(console.error);
 
-            renderDispatchPanel();
-        });
+                renderDispatchPanel();
+            }
+        );
 
         wrapper.appendChild(header);
         wrapper.appendChild(content);
@@ -728,7 +921,8 @@
     }
 
     function createUncategorizedElement() {
-        const items = getUncategorizedAAOs();
+        const items =
+            getUncategorizedAAOs();
 
         if (items.length === 0) {
             return null;
@@ -740,32 +934,43 @@
             collapsed: false
         };
 
-        const wrapper = document.createElement('div');
+        const wrapper =
+            document.createElement('div');
 
-        wrapper.className = 'afilia-dispatch-category';
+        wrapper.className =
+            'afilia-dispatch-category';
 
-        const header = document.createElement('div');
+        const header =
+            document.createElement('div');
 
         header.className =
             'afilia-dispatch-category-header afilia-dispatch-uncategorized';
 
         header.innerHTML = `
-            <span class="afilia-dispatch-category-arrow">▼</span>
-            <span class="afilia-dispatch-category-name">
-                ${category.name}
+            <span class="afilia-dispatch-category-arrow">
+                ▼
             </span>
+
+            <span class="afilia-dispatch-category-name">
+                ${escapeHTML(category.name)}
+            </span>
+
             <span class="afilia-dispatch-category-count">
                 ${items.length}
             </span>
         `;
 
-        const content = document.createElement('div');
+        const content =
+            document.createElement('div');
 
-        content.className = 'afilia-dispatch-category-content';
+        content.className =
+            'afilia-dispatch-category-content';
 
         for (const aao of items) {
             content.appendChild(
-                createDispatchAAOElement(aao)
+                createDispatchAAOElement(
+                    aao
+                )
             );
         }
 
@@ -776,27 +981,34 @@
     }
 
     function renderDispatchPanel() {
-        const dialog = findDispatchDialog();
+        const dialog =
+            findDispatchDialog();
 
         if (!dialog) {
             return;
         }
 
-        const list = findDispatchList(dialog);
+        const list =
+            findDispatchList(dialog);
 
         if (!list) {
             return;
         }
 
-        let panel = dialog.querySelector(
-            `#${DISPATCH_PANEL_ID}`
-        );
+        let panel =
+            dialog.querySelector(
+                `#${DISPATCH_PANEL_ID}`
+            );
 
         if (!panel) {
-            panel = document.createElement('div');
+            panel =
+                document.createElement('div');
 
-            panel.id = DISPATCH_PANEL_ID;
-            panel.className = 'afilia-dispatch-panel';
+            panel.id =
+                DISPATCH_PANEL_ID;
+
+            panel.className =
+                'afilia-dispatch-panel';
 
             list.parentElement.insertBefore(
                 panel,
@@ -804,25 +1016,40 @@
             );
         }
 
-
         list.style.display = 'none';
 
         panel.innerHTML = '';
 
-        const search = dispatchSearchValue.trim().toLowerCase();
+        const search =
+            dispatchSearchValue
+                .trim()
+                .toLowerCase();
 
-        const originalCatalog = Array.from(aaoCatalog.values());
+        const originalCatalog =
+            Array.from(
+                aaoCatalog.values()
+            );
+
+        /* -----------------------------------------------------
+           Categorized AAOs
+           ----------------------------------------------------- */
 
         for (const category of categories) {
-            const items = getAAOsForCategory(category.id)
-                .filter(aao => {
+            const items =
+                getAAOsForCategory(
+                    category.id
+                ).filter(aao => {
                     if (!search) {
                         return true;
                     }
 
                     return (
-                        aao.name.toLowerCase().includes(search) ||
-                        aao.summary.toLowerCase().includes(search)
+                        aao.name
+                            .toLowerCase()
+                            .includes(search) ||
+                        aao.summary
+                            .toLowerCase()
+                            .includes(search)
                     );
                 });
 
@@ -830,13 +1057,17 @@
                 continue;
             }
 
-            const wrapper = document.createElement('div');
+            const wrapper =
+                document.createElement('div');
 
-            wrapper.className = 'afilia-dispatch-category';
+            wrapper.className =
+                'afilia-dispatch-category';
 
-            const header = document.createElement('button');
+            const header =
+                document.createElement('button');
 
             header.type = 'button';
+
             header.className =
                 'afilia-dispatch-category-header';
 
@@ -854,31 +1085,40 @@
                 </span>
             `;
 
-            const content = document.createElement('div');
+            const content =
+                document.createElement('div');
 
             content.className =
                 'afilia-dispatch-category-content';
 
             if (category.collapsed) {
-                content.style.display = 'none';
+                content.style.display =
+                    'none';
             }
 
             for (const aao of items) {
                 content.appendChild(
-                    createDispatchAAOElement(aao)
+                    createDispatchAAOElement(
+                        aao
+                    )
                 );
             }
 
-            header.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
+            header.addEventListener(
+                'click',
+                event => {
+                    event.preventDefault();
+                    event.stopPropagation();
 
-                category.collapsed = !category.collapsed;
+                    category.collapsed =
+                        !category.collapsed;
 
-                saveCategories().catch(console.error);
+                    saveCategories()
+                        .catch(console.error);
 
-                renderDispatchPanel();
-            });
+                    renderDispatchPanel();
+                }
+            );
 
             wrapper.appendChild(header);
             wrapper.appendChild(content);
@@ -886,39 +1126,58 @@
             panel.appendChild(wrapper);
         }
 
+        /* -----------------------------------------------------
+           Uncategorized
+           ----------------------------------------------------- */
 
-        const uncategorized = originalCatalog
-            .filter(aao => !getCategoryForAAO(aao.key))
-            .filter(aao => {
-                if (!search) {
-                    return true;
-                }
+        const uncategorized =
+            originalCatalog
+                .filter(aao => {
+                    return !getCategoryForAAO(
+                        aao.key
+                    );
+                })
+                .filter(aao => {
+                    if (!search) {
+                        return true;
+                    }
 
-                return (
-                    aao.name.toLowerCase().includes(search) ||
-                    aao.summary.toLowerCase().includes(search)
-                );
-            })
-            .sort((a, b) => {
-                return a.name.localeCompare(
-                    b.name,
-                    'de',
-                    { sensitivity: 'base' }
-                );
-            });
+                    return (
+                        aao.name
+                            .toLowerCase()
+                            .includes(search) ||
+                        aao.summary
+                            .toLowerCase()
+                            .includes(search)
+                    );
+                })
+                .sort((a, b) => {
+                    return a.name.localeCompare(
+                        b.name,
+                        'de',
+                        {
+                            sensitivity: 'base'
+                        }
+                    );
+                });
 
         if (uncategorized.length > 0) {
-            const wrapper = document.createElement('div');
+            const wrapper =
+                document.createElement('div');
 
-            wrapper.className = 'afilia-dispatch-category';
+            wrapper.className =
+                'afilia-dispatch-category';
 
-            const header = document.createElement('div');
+            const header =
+                document.createElement('div');
 
             header.className =
                 'afilia-dispatch-category-header afilia-dispatch-uncategorized';
 
             header.innerHTML = `
-                <span class="afilia-dispatch-category-arrow">▼</span>
+                <span class="afilia-dispatch-category-arrow">
+                    ▼
+                </span>
 
                 <span class="afilia-dispatch-category-name">
                     Nicht zugeordnet
@@ -929,14 +1188,17 @@
                 </span>
             `;
 
-            const content = document.createElement('div');
+            const content =
+                document.createElement('div');
 
             content.className =
                 'afilia-dispatch-category-content';
 
             for (const aao of uncategorized) {
                 content.appendChild(
-                    createDispatchAAOElement(aao)
+                    createDispatchAAOElement(
+                        aao
+                    )
                 );
             }
 
@@ -950,9 +1212,10 @@
     }
 
     function updateAllDispatchItems() {
-        const panel = document.querySelector(
-            `#${DISPATCH_PANEL_ID}`
-        );
+        const panel =
+            document.querySelector(
+                `#${DISPATCH_PANEL_ID}`
+            );
 
         if (!panel) {
             return;
@@ -961,22 +1224,19 @@
         panel.querySelectorAll(
             '[data-afilia-aao-key]'
         ).forEach(element => {
-            const key = element.dataset.afiliaAAOKey;
+            const key =
+                element.getAttribute(
+                    'data-afilia-aao-key'
+                );
+
+            if (!key) {
+                return;
+            }
 
             setSelectedVisual(
                 element,
                 selectedAAOs.has(key)
             );
-
-            const name = element.querySelector(
-                '.font-semibold'
-            );
-
-            if (name) {
-                name.style.color = selectedAAOs.has(key)
-                    ? '#dc2626'
-                    : '#111827';
-            }
         });
     }
 
@@ -985,26 +1245,31 @@
        ========================================================= */
 
     function createSettingsPanel() {
-        const panel = document.createElement('div');
+        const panel =
+            document.createElement('div');
 
-        panel.id = SETTINGS_PANEL_ID;
+        panel.id =
+            SETTINGS_PANEL_ID;
 
         return panel;
     }
 
     function renderSettingsPanel() {
-        const container = findSettingsAAOContainer();
+        const container =
+            findSettingsAAOContainer();
 
         if (!container) {
             return;
         }
 
-        let panel = document.querySelector(
-            `#${SETTINGS_PANEL_ID}`
-        );
+        let panel =
+            document.querySelector(
+                `#${SETTINGS_PANEL_ID}`
+            );
 
         if (!panel) {
-            panel = createSettingsPanel();
+            panel =
+                createSettingsPanel();
 
             container.parentElement.insertBefore(
                 panel,
@@ -1012,13 +1277,16 @@
             );
         }
 
-        container.style.display = 'none';
+        container.style.display =
+            'none';
 
         panel.innerHTML = '';
 
-        const header = document.createElement('div');
+        const header =
+            document.createElement('div');
 
-        header.className = 'afilia-settings-header';
+        header.className =
+            'afilia-settings-header';
 
         header.innerHTML = `
             <div>
@@ -1043,37 +1311,52 @@
 
         header.querySelector(
             '.afilia-add-category'
-        ).addEventListener('click', async event => {
-            event.preventDefault();
-            event.stopPropagation();
+        ).addEventListener(
+            'click',
+            async event => {
+                event.preventDefault();
+                event.stopPropagation();
 
-            const name = prompt(
-                'Name der neuen Kategorie:'
-            );
+                const name =
+                    prompt(
+                        'Name der neuen Kategorie:'
+                    );
 
-            if (!name || !name.trim()) {
-                return;
+                if (
+                    !name ||
+                    !name.trim()
+                ) {
+                    return;
+                }
+
+                categories.push({
+                    id: createID(
+                        'category'
+                    ),
+                    name: name.trim(),
+                    collapsed: false
+                });
+
+                await saveCategories();
+
+                renderSettingsPanel();
+                renderDispatchPanel();
             }
+        );
 
-            categories.push({
-                id: createID('category'),
-                name: name.trim(),
-                collapsed: false
-            });
-
-            await saveCategories();
-
-            renderSettingsPanel();
-            renderDispatchPanel();
-        });
+        /* -----------------------------------------------------
+           Categories
+           ----------------------------------------------------- */
 
         for (const category of categories) {
-            const section = document.createElement('div');
+            const section =
+                document.createElement('div');
 
             section.className =
                 'afilia-settings-category';
 
-            const categoryHeader = document.createElement('div');
+            const categoryHeader =
+                document.createElement('div');
 
             categoryHeader.className =
                 'afilia-settings-category-header';
@@ -1109,121 +1392,187 @@
                 </span>
             `;
 
-            section.appendChild(categoryHeader);
+            section.appendChild(
+                categoryHeader
+            );
 
-            const content = document.createElement('div');
+            const content =
+                document.createElement('div');
 
             content.className =
                 'afilia-settings-category-content';
 
             if (category.collapsed) {
-                content.style.display = 'none';
+                content.style.display =
+                    'none';
             }
 
-            const aaos = Array.from(aaoCatalog.values())
-                .filter(aao => {
-                    return assignments[aao.key] === category.id;
-                })
-                .sort((a, b) => {
-                    return a.name.localeCompare(
-                        b.name,
-                        'de',
-                        { sensitivity: 'base' }
-                    );
-                });
+            const aaos =
+                Array.from(
+                    aaoCatalog.values()
+                )
+                    .filter(aao => {
+                        return assignments[
+                            aao.key
+                        ] === category.id;
+                    })
+                    .sort((a, b) => {
+                        return a.name.localeCompare(
+                            b.name,
+                            'de',
+                            {
+                                sensitivity:
+                                    'base'
+                            }
+                        );
+                    });
 
             for (const aao of aaos) {
                 content.appendChild(
-                    createSettingsAAORow(aao)
+                    createSettingsAAORow(
+                        aao
+                    )
                 );
             }
 
+            /* -------------------------------------------------
+               Collapse
+               ------------------------------------------------- */
+
             categoryHeader.querySelector(
                 '.afilia-category-collapse'
-            ).addEventListener('click', async event => {
-                event.preventDefault();
-                event.stopPropagation();
+            ).addEventListener(
+                'click',
+                async event => {
+                    event.preventDefault();
+                    event.stopPropagation();
 
-                category.collapsed = !category.collapsed;
+                    category.collapsed =
+                        !category.collapsed;
 
-                await saveCategories();
+                    await saveCategories();
 
-                renderSettingsPanel();
-                renderDispatchPanel();
-            });
+                    renderSettingsPanel();
+                    renderDispatchPanel();
+                }
+            );
+
+            /* -------------------------------------------------
+               Rename
+               ------------------------------------------------- */
 
             categoryHeader.querySelector(
                 '.afilia-category-rename'
-            ).addEventListener('click', async event => {
-                event.preventDefault();
-                event.stopPropagation();
+            ).addEventListener(
+                'click',
+                async event => {
+                    event.preventDefault();
+                    event.stopPropagation();
 
-                const newName = prompt(
-                    'Neuer Kategoriename:',
-                    category.name
-                );
+                    const newName =
+                        prompt(
+                            'Neuer Kategoriename:',
+                            category.name
+                        );
 
-                if (!newName || !newName.trim()) {
-                    return;
+                    if (
+                        !newName ||
+                        !newName.trim()
+                    ) {
+                        return;
+                    }
+
+                    category.name =
+                        newName.trim();
+
+                    await saveCategories();
+
+                    renderSettingsPanel();
+                    renderDispatchPanel();
                 }
+            );
 
-                category.name = newName.trim();
-
-                await saveCategories();
-
-                renderSettingsPanel();
-                renderDispatchPanel();
-            });
+            /* -------------------------------------------------
+               Delete
+               ------------------------------------------------- */
 
             categoryHeader.querySelector(
                 '.afilia-category-delete'
-            ).addEventListener('click', async event => {
-                event.preventDefault();
-                event.stopPropagation();
+            ).addEventListener(
+                'click',
+                async event => {
+                    event.preventDefault();
+                    event.stopPropagation();
 
-                const usedBy = Object.values(assignments)
-                    .filter(id => id === category.id)
-                    .length;
+                    const usedBy =
+                        Object.values(
+                            assignments
+                        ).filter(
+                            id =>
+                                id ===
+                                category.id
+                        ).length;
 
-                const message = usedBy > 0
-                    ? `Die Kategorie "${category.name}" enthält ${usedBy} AAO(s).\n\nDiese AAOs werden anschließend nicht zugeordnet sein.\n\nKategorie löschen?`
-                    : `Kategorie "${category.name}" löschen?`;
+                    const message =
+                        usedBy > 0
+                            ? `Die Kategorie "${category.name}" enthält ${usedBy} AAO(s).\n\nDiese AAOs werden anschließend nicht zugeordnet sein.\n\nKategorie löschen?`
+                            : `Kategorie "${category.name}" löschen?`;
 
-                if (!confirm(message)) {
-                    return;
-                }
-
-                for (const key of Object.keys(assignments)) {
-                    if (assignments[key] === category.id) {
-                        delete assignments[key];
+                    if (!confirm(message)) {
+                        return;
                     }
+
+                    for (
+                        const key of
+                        Object.keys(
+                            assignments
+                        )
+                    ) {
+                        if (
+                            assignments[key] ===
+                            category.id
+                        ) {
+                            delete assignments[
+                                key
+                            ];
+                        }
+                    }
+
+                    categories =
+                        categories.filter(
+                            item =>
+                                item.id !==
+                                category.id
+                        );
+
+                    await saveCategories();
+                    await saveAssignments();
+
+                    renderSettingsPanel();
+                    renderDispatchPanel();
                 }
-
-                categories = categories.filter(
-                    item => item.id !== category.id
-                );
-
-                await saveCategories();
-                await saveAssignments();
-
-                renderSettingsPanel();
-                renderDispatchPanel();
-            });
+            );
 
             section.appendChild(content);
             panel.appendChild(section);
         }
 
+        /* -----------------------------------------------------
+           Uncategorized
+           ----------------------------------------------------- */
 
-        const uncategorized = getUncategorizedAAOs();
+        const uncategorized =
+            getUncategorizedAAOs();
 
         if (uncategorized.length > 0) {
-            const section = document.createElement('div');
+            const section =
+                document.createElement('div');
 
             section.className =
                 'afilia-settings-category afilia-uncategorized';
 
-            const headerElement = document.createElement('div');
+            const headerElement =
+                document.createElement('div');
 
             headerElement.className =
                 'afilia-settings-category-header';
@@ -1240,16 +1589,21 @@
                 </div>
             `;
 
-            section.appendChild(headerElement);
+            section.appendChild(
+                headerElement
+            );
 
-            const content = document.createElement('div');
+            const content =
+                document.createElement('div');
 
             content.className =
                 'afilia-settings-category-content';
 
             for (const aao of uncategorized) {
                 content.appendChild(
-                    createSettingsAAORow(aao)
+                    createSettingsAAORow(
+                        aao
+                    )
                 );
             }
 
@@ -1260,13 +1614,16 @@
     }
 
     function createSettingsAAORow(aao) {
-        const row = document.createElement('div');
+        const row =
+            document.createElement('div');
 
         row.className =
             'afilia-settings-aao-row';
 
         const currentCategory =
-            getCategoryForAAO(aao.key);
+            getCategoryForAAO(
+                aao.key
+            );
 
         row.innerHTML = `
             <div class="afilia-settings-aao-info">
@@ -1287,12 +1644,17 @@
                 ${categories.map(category => `
                     <option
                         value="${escapeHTML(category.id)}"
-                        ${currentCategory &&
-                        currentCategory.id === category.id
-                            ? 'selected'
-                            : ''}
+                        ${
+                            currentCategory &&
+                            currentCategory.id ===
+                                category.id
+                                ? 'selected'
+                                : ''
+                        }
                     >
-                        ${escapeHTML(category.name)}
+                        ${escapeHTML(
+                            category.name
+                        )}
                     </option>
                 `).join('')}
             </select>
@@ -1306,56 +1668,87 @@
             </button>
         `;
 
-        const select = row.querySelector(
-            '.afilia-settings-aao-select'
-        );
+        const select =
+            row.querySelector(
+                '.afilia-settings-aao-select'
+            );
 
-        select.addEventListener('change', async event => {
-            event.preventDefault();
-            event.stopPropagation();
+        select.addEventListener(
+            'change',
+            async event => {
+                event.preventDefault();
+                event.stopPropagation();
 
-            const value = select.value;
+                const value =
+                    select.value;
 
-            if (value) {
-                assignments[aao.key] = value;
-            } else {
-                delete assignments[aao.key];
+                if (value) {
+                    assignments[
+                        aao.key
+                    ] = value;
+                } else {
+                    delete assignments[
+                        aao.key
+                    ];
+                }
+
+                await saveAssignments();
+
+                renderSettingsPanel();
+                renderDispatchPanel();
             }
-
-            await saveAssignments();
-
-            renderSettingsPanel();
-            renderDispatchPanel();
-        });
-
+        );
 
         row.querySelector(
             '.afilia-settings-edit'
-        ).addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
+        ).addEventListener(
+            'click',
+            event => {
+                event.preventDefault();
+                event.stopPropagation();
 
-            const original = originalAAORows.get(aao.key);
+                const original =
+                    originalAAORows.get(
+                        aao.key
+                    );
 
-            if (!original) {
-                return;
+                if (!original) {
+                    return;
+                }
+
+                const editButton =
+                    Array.from(
+                        original.querySelectorAll(
+                            'button'
+                        )
+                    ).find(button => {
+                        const svg =
+                            button.querySelector(
+                                'svg'
+                            );
+
+                        return (
+                            svg &&
+                            (
+                                svg.classList.contains(
+                                    'lucide-pencil'
+                                ) ||
+                                svg
+                                    .getAttribute(
+                                        'class'
+                                    )
+                                    ?.includes(
+                                        'pencil'
+                                    )
+                            )
+                        );
+                    });
+
+                if (editButton) {
+                    editButton.click();
+                }
             }
-
-            const editButton = Array.from(
-                original.querySelectorAll('button')
-            ).find(button => {
-                const svg = button.querySelector('svg');
-
-                return svg && (
-                    svg.classList.contains('lucide-pencil') ||
-                    svg.getAttribute('class')?.includes('pencil')
-                );
-            });
-
-            if (editButton) {
-                editButton.click();
-            }
-        });
+        );
 
         return row;
     }
@@ -1365,25 +1758,34 @@
        ========================================================= */
 
     function hookDispatchSearch(dialog) {
-        const input = dialog?.querySelector(
-            'input[placeholder="AAO suchen..."]'
-        );
+        const input =
+            dialog?.querySelector(
+                'input[placeholder="AAO suchen..."]'
+            );
 
         if (!input) {
             return;
         }
 
-        if (input.dataset.afiliaSearchHooked === 'true') {
+        if (
+            input.dataset.afiliaSearchHooked ===
+            'true'
+        ) {
             return;
         }
 
-        input.dataset.afiliaSearchHooked = 'true';
+        input.dataset.afiliaSearchHooked =
+            'true';
 
-        input.addEventListener('input', () => {
-            dispatchSearchValue = input.value || '';
+        input.addEventListener(
+            'input',
+            () => {
+                dispatchSearchValue =
+                    input.value || '';
 
-            renderDispatchPanel();
-        });
+                renderDispatchPanel();
+            }
+        );
     }
 
     /* =========================================================
@@ -1391,9 +1793,19 @@
        ========================================================= */
 
     function injectStyles() {
-        const style = document.createElement('style');
+        if (
+            document.getElementById(
+                'afilia-aao-category-styles'
+            )
+        ) {
+            return;
+        }
 
-        style.id = 'afilia-aao-category-styles';
+        const style =
+            document.createElement('style');
+
+        style.id =
+            'afilia-aao-category-styles';
 
         style.textContent = `
             /* =====================================================
@@ -1655,6 +2067,20 @@
                 background-color: #fef2f2 !important;
             }
 
+            .afilia-aao-dispatch-item {
+                user-select: none;
+                -webkit-user-select: none;
+            }
+
+            .afilia-aao-dispatch-item:focus-visible {
+                outline: 2px solid #ef4444;
+                outline-offset: 2px;
+            }
+
+            .afilia-aao-dispatch-item:hover {
+                transform: translateY(-1px);
+            }
+
             /* =====================================================
                Mobile
                ===================================================== */
@@ -1685,21 +2111,25 @@
        ========================================================= */
 
     function scan() {
-
         discoverAAOs();
+
+        /* -----------------------------------------------------
+           Settings
+           ----------------------------------------------------- */
 
         const settingsContainer =
             findSettingsAAOContainer();
 
         if (settingsContainer) {
-
             if (
-                settingsContainer !== lastSettingsContainer ||
+                settingsContainer !==
+                    lastSettingsContainer ||
                 !document.querySelector(
                     `#${SETTINGS_PANEL_ID}`
                 )
             ) {
-                lastSettingsContainer = settingsContainer;
+                lastSettingsContainer =
+                    settingsContainer;
 
                 renderSettingsPanel();
             }
@@ -1707,26 +2137,36 @@
             lastSettingsContainer = null;
         }
 
+        /* -----------------------------------------------------
+           Dispatch
+           ----------------------------------------------------- */
 
-        const dispatchDialog = findDispatchDialog();
+        const dispatchDialog =
+            findDispatchDialog();
 
         if (dispatchDialog) {
-            hookDispatchSearch(dispatchDialog);
+            hookDispatchSearch(
+                dispatchDialog
+            );
 
-            const list = findDispatchList(dispatchDialog);
+            const list =
+                findDispatchList(
+                    dispatchDialog
+                );
 
             if (list) {
                 if (
-                    dispatchDialog !== lastDispatchContainer ||
+                    dispatchDialog !==
+                        lastDispatchContainer ||
                     !document.querySelector(
                         `#${DISPATCH_PANEL_ID}`
                     )
                 ) {
-                    lastDispatchContainer = dispatchDialog;
+                    lastDispatchContainer =
+                        dispatchDialog;
 
                     renderDispatchPanel();
                 } else {
-
                     updateAllDispatchItems();
                 }
             }
@@ -1763,34 +2203,44 @@
             observer.disconnect();
         }
 
-        observer = new MutationObserver(mutations => {
-            let relevant = false;
+        observer =
+            new MutationObserver(
+                mutations => {
+                    let relevant = false;
 
-            for (const mutation of mutations) {
-                if (
-                    mutation.type === 'childList' ||
-                    mutation.type === 'attributes'
-                ) {
-                    relevant = true;
-                    break;
+                    for (
+                        const mutation of mutations
+                    ) {
+                        if (
+                            mutation.type ===
+                                'childList' ||
+                            mutation.type ===
+                                'attributes'
+                        ) {
+                            relevant = true;
+                            break;
+                        }
+                    }
+
+                    if (relevant) {
+                        scheduleScan();
+                    }
                 }
-            }
+            );
 
-            if (relevant) {
-                scheduleScan();
+        observer.observe(
+            document.body,
+            {
+                subtree: true,
+                childList: true,
+                attributes: true,
+                attributeFilter: [
+                    'class',
+                    'style',
+                    'data-state'
+                ]
             }
-        });
-
-        observer.observe(document.body, {
-            subtree: true,
-            childList: true,
-            attributes: true,
-            attributeFilter: [
-                'class',
-                'style',
-                'data-state'
-            ]
-        });
+        );
     }
 
     /* =========================================================
@@ -1799,7 +2249,8 @@
 
     async function initialize() {
         try {
-            db = await openDatabase();
+            db =
+                await openDatabase();
 
             await loadData();
 
