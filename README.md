@@ -8,7 +8,7 @@ Es:
 - speichert Kategorien und Zuordnungen lokal im Browser über IndexedDB,
 - ersetzt die AAO-Auswahl im Alarmierungsfenster durch eine kategorisierte Ansicht,
 - ermöglicht Suche, Ein-/Ausblenden, Bearbeiten und Löschen von AAOs,
-- ermöglicht das individuelle Verschieben und Sortieren der Kategorien,
+- ermöglicht das individuelle Verschieben und Sortieren der Kategorien per Drag-and-Drop,
 - prüft beim Start die `version.json` auf GitHub Pages und weist auf Updates hin,
 - synchronisiert die Anzeige automatisch mit Änderungen im Spiel.
 

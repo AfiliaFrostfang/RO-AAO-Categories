@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Afilia AAO Categories
 // @namespace    https://afiliafrostfang.de/
-// @version      1.5.0
+// @version      1.5.1
 // @description  Categorizes Rescue Operator AAOs and adds categorized AAO selection to the vehicle dispatch window.
 // @author       AfiliaFrostfang
 // @match        https://game.rescue-operator.com/*
@@ -19,8 +19,7 @@
     const DB_NAME = 'AfiliaAAOCategoriesV2';
     const DB_VERSION = 1;
     const STORE_NAME = 'settings';
-
-    const SCRIPT_VERSION = '1.5.0';
+    const SCRIPT_VERSION = '1.5.1';
     const UPDATE_MANIFEST_URL =
         'https://afiliafrostfang.github.io/RO-AAO-Categories/version.json';
     const PROJECT_URL =
@@ -68,6 +67,7 @@
     let lastSettingsContainer = null;
 
     let dispatchSearchValue = '';
+    let draggedCategoryID = null;
 
     /* =========================================================
        IndexedDB
@@ -304,25 +304,41 @@
         );
     }
 
-    async function moveCategory(categoryID, direction) {
-        const index = categories.findIndex(
+    async function moveCategoryBefore(
+        categoryID,
+        targetCategoryID
+    ) {
+        const sourceIndex = categories.findIndex(
             category => category.id === categoryID
         );
 
-        const targetIndex = index + direction;
+        const targetIndex = categories.findIndex(
+            category => category.id === targetCategoryID
+        );
 
         if (
-            index < 0 ||
+            sourceIndex < 0 ||
             targetIndex < 0 ||
-            targetIndex >= categories.length
+            sourceIndex === targetIndex
         ) {
             return;
         }
 
-        const category = categories[index];
+        const [category] = categories.splice(
+            sourceIndex,
+            1
+        );
 
-        categories[index] = categories[targetIndex];
-        categories[targetIndex] = category;
+        const adjustedTargetIndex =
+            sourceIndex < targetIndex
+                ? targetIndex - 1
+                : targetIndex;
+
+        categories.splice(
+            adjustedTargetIndex,
+            0,
+            category
+        );
 
         await saveCategories();
 
@@ -1420,12 +1436,15 @@
            Categories
            ----------------------------------------------------- */
 
-        for (const [index, category] of categories.entries()) {
+        for (const category of categories) {
             const section =
                 document.createElement('div');
 
             section.className =
                 'afilia-settings-category';
+
+            section.dataset.categoryID =
+                category.id;
 
             const categoryHeader =
                 document.createElement('div');
@@ -1434,6 +1453,15 @@
                 'afilia-settings-category-header';
 
             categoryHeader.innerHTML = `
+                <span
+                    class="afilia-category-drag-handle"
+                    draggable="true"
+                    title="Kategorie verschieben"
+                    aria-label="Kategorie verschieben"
+                >
+                    ⋮⋮
+                </span>
+
                 <button
                     type="button"
                     class="afilia-category-collapse"
@@ -1446,24 +1474,6 @@
                 </span>
 
                 <span class="afilia-category-actions">
-                    <button
-                        type="button"
-                        class="afilia-category-move-up"
-                        title="Kategorie nach oben verschieben"
-                        ${index === 0 ? 'disabled' : ''}
-                    >
-                        ↑
-                    </button>
-
-                    <button
-                        type="button"
-                        class="afilia-category-move-down"
-                        title="Kategorie nach unten verschieben"
-                        ${index === categories.length - 1 ? 'disabled' : ''}
-                    >
-                        ↓
-                    </button>
-
                     <button
                         type="button"
                         class="afilia-category-rename"
@@ -1486,32 +1496,106 @@
                 categoryHeader
             );
 
-            categoryHeader.querySelector(
-                '.afilia-category-move-up'
-            ).addEventListener(
-                'click',
-                async event => {
-                    event.preventDefault();
-                    event.stopPropagation();
+            const dragHandle =
+                categoryHeader.querySelector(
+                    '.afilia-category-drag-handle'
+                );
 
-                    await moveCategory(
-                        category.id,
-                        -1
+            dragHandle.addEventListener(
+                'dragstart',
+                event => {
+                    draggedCategoryID = category.id;
+                    section.classList.add(
+                        'afilia-category-dragging'
+                    );
+
+                    event.dataTransfer.effectAllowed =
+                        'move';
+                    event.dataTransfer.setData(
+                        'text/plain',
+                        category.id
                     );
                 }
             );
 
-            categoryHeader.querySelector(
-                '.afilia-category-move-down'
-            ).addEventListener(
-                'click',
+            dragHandle.addEventListener(
+                'dragend',
+                () => {
+                    draggedCategoryID = null;
+
+                    document.querySelectorAll(
+                        '.afilia-category-dragging, .afilia-category-drop-target'
+                    ).forEach(element => {
+                        element.classList.remove(
+                            'afilia-category-dragging',
+                            'afilia-category-drop-target'
+                        );
+                    });
+                }
+            );
+
+            section.addEventListener(
+                'dragover',
+                event => {
+                    if (
+                        !draggedCategoryID ||
+                        draggedCategoryID === category.id
+                    ) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect =
+                        'move';
+
+                    section.classList.add(
+                        'afilia-category-drop-target'
+                    );
+                }
+            );
+
+            section.addEventListener(
+                'dragleave',
+                event => {
+                    if (
+                        event.relatedTarget &&
+                        section.contains(
+                            event.relatedTarget
+                        )
+                    ) {
+                        return;
+                    }
+
+                    section.classList.remove(
+                        'afilia-category-drop-target'
+                    );
+                }
+            );
+
+            section.addEventListener(
+                'drop',
                 async event => {
                     event.preventDefault();
-                    event.stopPropagation();
 
-                    await moveCategory(
-                        category.id,
-                        1
+                    const sourceCategoryID =
+                        event.dataTransfer.getData(
+                            'text/plain'
+                        ) || draggedCategoryID;
+
+                    section.classList.remove(
+                        'afilia-category-drop-target'
+                    );
+
+                    if (
+                        !sourceCategoryID ||
+                        sourceCategoryID === category.id
+                    ) {
+                        return;
+                    }
+
+                    await moveCategoryBefore(
+                        sourceCategoryID,
+                        category.id
                     );
                 }
             );
@@ -2118,6 +2202,36 @@
                 background: transparent;
                 cursor: pointer;
                 color: #6b7280;
+            }
+
+            .afilia-category-drag-handle {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 20px;
+                height: 28px;
+                color: #9ca3af;
+                cursor: grab;
+                font-size: 16px;
+                letter-spacing: 0;
+                user-select: none;
+            }
+
+            .afilia-category-drag-handle:hover {
+                color: #4b5563;
+            }
+
+            .afilia-category-drag-handle:active {
+                cursor: grabbing;
+            }
+
+            .afilia-category-dragging {
+                opacity: 0.55;
+            }
+
+            .afilia-category-drop-target {
+                border-color: #ef4444;
+                box-shadow: 0 0 0 2px #fee2e2;
             }
 
             .afilia-category-name {
