@@ -1,5 +1,5 @@
-# RO-AAO-Categories
-QoL Skript für Rescue Operator das die AAOs in Kategorien einteilen lässt
+# RO-Afilia Toolbox
+QoL Skript für Rescue Operator das verschiedene Grafische Änderungen mit sich bringt.
 
 Es:
 
@@ -19,7 +19,6 @@ Der Quellcode wird hier immer sichtbar und einsehbar sein und kann jederzeit dur
 
 # Geplante Features
 
-- Erweiterung der Funktionen zu einer Toolbox
 - Notizblock Feature
 - UI Overhaul für diverse Fenster z.b Krankenhausübersicht
 - 'Applet Store' um Toolbox und dessen Funktionen zu personalisieren.
