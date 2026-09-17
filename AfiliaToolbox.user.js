@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Afilia Toolbox
 // @namespace    https://afiliafrostfang.de/
-// @version      1.5.2
+// @version      1.5.3
 // @description  Categorizes Rescue Operator AAOs and adds categorized AAO selection to the vehicle dispatch window.
 // @author       AfiliaFrostfang
 // @match        https://game.rescue-operator.com/*
@@ -20,11 +20,11 @@
     const DB_VERSION = 1;
     const STORE_NAME = 'settings';
     const SCRIPT_NAME = 'Afilia Toolbox';
-    const SCRIPT_VERSION = '1.5.2';
+    const SCRIPT_VERSION = '1.5.3';
     const UPDATE_MANIFEST_URL =
-        'https://afiliafrostfang.github.io/RO-AAO-Categories/version.json';
+        'https://afiliafrostfang.github.io/RO-AfiliaToolbox/version.json';
     const PROJECT_URL =
-        'https://github.com/AfiliaFrostfang/RO-AAO-Categories';
+        'https://github.com/AfiliaFrostfang/RO-AfiliaToolbox';
 
     const SETTINGS_PANEL_ID = 'afilia-aao-category-panel';
     const DISPATCH_PANEL_ID = 'afilia-aao-dispatch-panel';
